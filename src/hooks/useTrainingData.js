@@ -1,10 +1,11 @@
 import { useState, useCallback, useEffect } from 'react'
+import { doc, onSnapshot, setDoc } from 'firebase/firestore'
 import { db } from '../firebase'
-import { ensureTrainingDataFromFirestore } from '../utils/firestore'
-import { getFromFirestore, saveToFirestore } from '../utils/firestore'
+import { ensureTrainingDataFromFirestore, saveToFirestore } from '../utils/firestore'
 import { normalizeVerbalCert } from '../utils/helpers'
 
 const TRAINING_DATA_KEY = 'trainingData'
+const TRAINING_DATA_FETCHED_AT_KEY = 'trainingData_fetchedAt'
 
 function loadFromStorage() {
   try {
@@ -32,20 +33,44 @@ export function listTrainees(trainingData, { store = null, includeArchived = fal
 export function useTrainingData() {
   const [trainingData, setTrainingData] = useState(loadFromStorage)
   const [trainingDataLoading, setTrainingDataLoading] = useState(true)
+  const [trainingDataFetchedAt, setTrainingDataFetchedAt] = useState(() => {
+    try { return localStorage.getItem(TRAINING_DATA_FETCHED_AT_KEY) || null } catch (_) { return null }
+  })
 
   const reload = useCallback(() => {
     setTrainingData(loadFromStorage())
   }, [])
 
+  const refreshFromFirestore = useCallback(async () => {
+    await ensureTrainingDataFromFirestore()
+    setTrainingData(loadFromStorage())
+  }, [])
+
   useEffect(() => {
-    let cancelled = false
-    ensureTrainingDataFromFirestore().then(() => {
-      if (cancelled) return
+    if (!db) {
       setTrainingDataLoading(false)
-      let data = loadFromStorage()
-      const has7777 = Object.values(data || {}).some((r) => r && String(r.employeeNumber || '').trim() === '7777')
+      return
+    }
+    const ref = doc(db, 'config', 'trainingData')
+    const unsub = onSnapshot(ref, async (snap) => {
+      if (!snap.exists()) {
+        setTrainingDataLoading(false)
+        return
+      }
+      const { data: dataKey, ...rest } = snap.data()
+      const remote = dataKey && typeof dataKey === 'object' ? dataKey : rest
+      if (typeof remote !== 'object') {
+        setTrainingDataLoading(false)
+        return
+      }
+      const now = new Date().toISOString()
+      try { localStorage.setItem(TRAINING_DATA_KEY, JSON.stringify(remote)) } catch (_) {}
+      try { localStorage.setItem(TRAINING_DATA_FETCHED_AT_KEY, now) } catch (_) {}
+      setTrainingDataFetchedAt(now)
+      setTrainingDataLoading(false)
+      const has7777 = Object.values(remote || {}).some((r) => r && String(r.employeeNumber || '').trim() === '7777')
       if (!has7777) {
-        data = { ...data }
+        const data = { ...remote }
         const id = 'T-Westfield-7777'
         data[id] = {
           id,
@@ -56,15 +81,21 @@ export function useTrainingData() {
           archived: false,
         }
         setTrainingData(data)
+        try { localStorage.setItem(TRAINING_DATA_KEY, JSON.stringify(data)) } catch (_) {}
         try {
-          localStorage.setItem(TRAINING_DATA_KEY, JSON.stringify(data))
+          await saveToFirestore('config', 'trainingData', { data, updatedAt: now })
         } catch (_) {}
-        saveTrainingData(data)
       } else {
-        setTrainingData(data)
+        setTrainingData(remote)
       }
+    }, (err) => {
+      console.warn('[TrainingData] onSnapshot error, falling back to one-time fetch:', err?.message)
+      ensureTrainingDataFromFirestore().then(() => {
+        setTrainingData(loadFromStorage())
+        setTrainingDataLoading(false)
+      })
     })
-    return () => { cancelled = true }
+    return () => unsub()
   }, [])
 
   const saveTrainingData = useCallback(async (data) => {
@@ -78,21 +109,53 @@ export function useTrainingData() {
       const toSave = JSON.parse(JSON.stringify({ data: payload, updatedAt: new Date().toISOString() }))
       await saveToFirestore('config', 'trainingData', toSave)
     } catch (e) {
-      console.warn('[TrainingData] Firestore save failed:', e?.message)
+      console.error('[TrainingData] Firestore save FAILED:', e?.message, e?.code, e)
     }
   }, [trainingData])
 
   const archiveTrainee = useCallback(async (id) => {
+    const prev = trainingData
     const next = { ...trainingData }
     if (!next[id]) return
     next[id] = { ...next[id], archived: true }
     setTrainingData(next)
-    await saveTrainingData(next)
+    try {
+      await saveTrainingData(next)
+    } catch (e) {
+      console.error('[TrainingData] Archive failed, rolling back:', e?.message)
+      setTrainingData(prev)
+    }
+  }, [trainingData, saveTrainingData])
+
+  const terminateTrainee = useCallback(async (id, reason, note, snapshot, byEmpNum) => {
+    const prev = trainingData
+    const next = { ...trainingData }
+    if (!next[id]) return
+    next[id] = {
+      ...next[id],
+      archived: true,
+      terminated: true,
+      terminatedAt: new Date().toISOString(),
+      terminatedBy: byEmpNum || '',
+      terminationReason: reason || '',
+      terminationNote: note || '',
+      terminationSnapshot: snapshot || {},
+    }
+    setTrainingData(next)
+    try {
+      await saveTrainingData(next)
+    } catch (e) {
+      console.error('[TrainingData] Terminate failed, rolling back:', e?.message)
+      setTrainingData(prev)
+    }
   }, [trainingData, saveTrainingData])
 
   const restoreTrainee = useCallback((id) => {
     const next = { ...trainingData }
-    if (next[id]) next[id] = { ...next[id], archived: false }
+    if (next[id]) {
+      const { terminated, terminatedAt, terminatedBy, terminationReason, terminationNote, terminationSnapshot, ...rest } = next[id]
+      next[id] = { ...rest, archived: false }
+    }
     setTrainingData(next)
     saveTrainingData(next)
   }, [trainingData, saveTrainingData])
@@ -110,16 +173,31 @@ export function useTrainingData() {
     if (!emp) return null
     const next = { ...trainingData }
     if (next[id]) return id
-    next[id] = {
+    const entry = {
       id,
       employeeNumber: emp,
+      empNum: emp,
       name: (name || '').trim() || `Trainee ${emp}`,
       store: store || 'Westfield',
       schedule: {},
       archived: false,
     }
+    next[id] = entry
     setTrainingData(next)
     saveTrainingData(next)
+    // Also write to trainees/{empNum} as an independent fallback so login always works
+    // even if the config/trainingData write fails or is delayed
+    if (db) {
+      setDoc(doc(db, 'trainees', emp), {
+        empNum: emp,
+        employeeNumber: emp,
+        name: entry.name,
+        store: entry.store,
+        archived: false,
+        traineeId: id,
+        updatedAt: new Date().toISOString(),
+      }, { merge: true }).catch((e) => console.warn('[TrainingData] trainees fallback write failed:', e?.message))
+    }
     return id
   }, [trainingData, saveTrainingData])
 
@@ -179,10 +257,13 @@ export function useTrainingData() {
     trainingData,
     setTrainingData,
     trainingDataLoading,
+    trainingDataFetchedAt,
     reload,
+    refreshFromFirestore,
     saveTrainingData,
     listTrainees: (opts) => listTrainees(trainingData, opts),
     archiveTrainee,
+    terminateTrainee,
     restoreTrainee,
     restartTraineeTraining,
     deleteTrainee,

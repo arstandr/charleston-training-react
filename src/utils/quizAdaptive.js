@@ -1,29 +1,17 @@
 /**
- * Mercy Rule: build official test question set adaptive to attempt count and flashcard mastery.
- * - First attempt: 60% struggle, 40% mastered/neutral (challenge).
- * - Retake: 60% mastered/neutral, 40% struggle (mercy).
- * Option A: map each quiz question to a flashcard (by matching correct answer to card.back) for mastery lookup.
+ * Adaptive test building from flashcard mastery data.
+ * - Attempt 1: 50/50 even mix of struggle and mastered/neutral.
+ * - Attempt 2: ~80% mastered/neutral, ~20% struggle (confidence builder).
+ * - Attempt 3+: 100% struggle cards (remediation — fill from neutral if not enough).
+ *
+ * Flashcards are the single source of truth — no QUIZ_DATABASE needed.
+ * Each card with approved quizData becomes a question; card.id is used directly for mastery lookup.
  */
 
-const OFFICIAL_QUESTION_COUNT = 28
+import { isQuizApproved } from '../services/flashcardService'
 
-function normalizeForMatch(str) {
-  return (str || '').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 80)
-}
-
-/** Find a card in the set whose back or front matches the correct answer text. */
-function findCardIdForQuestion(setId, correctAnswerText, cards, stableCardId) {
-  if (!setId || !cards?.length || !stableCardId) return null
-  const norm = normalizeForMatch(correctAnswerText)
-  if (!norm) return null
-  for (const card of cards) {
-    const backNorm = normalizeForMatch(card.back)
-    const frontNorm = normalizeForMatch(card.front)
-    if (backNorm && (norm.includes(backNorm) || backNorm.includes(norm))) return stableCardId(setId, card)
-    if (frontNorm && (norm.includes(frontNorm) || frontNorm.includes(norm))) return stableCardId(setId, card)
-  }
-  return null
-}
+/** Number of regular (non-bonus) questions in an official test. 3 bonus are added in QuizzesPage. */
+const OFFICIAL_QUESTION_COUNT = 20
 
 function shuffle(arr) {
   const a = [...arr]
@@ -34,93 +22,132 @@ function shuffle(arr) {
   return a
 }
 
+/** Convert a flashcard with quizData into a quiz question object. */
+function cardToQuestion(card) {
+  const qd = card.quizData
+  return {
+    q: qd.q,
+    opts: qd.opts,
+    ans: qd.ans,
+    exp: qd.exp || '',
+    cardId: card.id,
+    cardFront: card.front,
+    cardBack: card.back,
+    source: 'flashcard',
+  }
+}
+
 /**
- * Build adaptive official test questions.
+ * Build adaptive official test questions from flashcard pool.
  * @param {string} testId - e.g. 'bar_test'
  * @param {string} traineeId
  * @param {{ getAttempts: (id) => { count: number }, getMastery: (cardId) => { status: string } }} deps
- * @param {{ QUIZ_DATABASE: object, TEST_TO_FLASHCARD_SET: object, FLASHCARD_DATABASE: object, stableCardId: (setId, card) => string }} data
+ * @param {{ TEST_TO_FLASHCARD_SET: object, FLASHCARD_DATABASE: object, stableCardId: (setId, card) => string }} data
  * @returns {{ questions: any[], indices: number[] }}
  */
 export function buildAdaptiveOfficialTest(testId, traineeId, deps, data) {
   const { getAttempts, getMastery } = deps
-  const { QUIZ_DATABASE, TEST_TO_FLASHCARD_SET, FLASHCARD_DATABASE, stableCardId } = data
-  const quiz = QUIZ_DATABASE?.[testId]
-  if (!quiz?.questions?.length) return { questions: [], indices: [] }
+  const { TEST_TO_FLASHCARD_SET, FLASHCARD_DATABASE, stableCardId } = data
 
-  const attemptCount = (getAttempts(testId) || {}).count || 0
-  const isRetake = attemptCount >= 1
   const setId = TEST_TO_FLASHCARD_SET?.[testId]
   const cards = setId ? (FLASHCARD_DATABASE?.[setId] || []) : []
+
+  // Filter to approved quiz-ready cards
+  const pool = cards.filter((c) => c.quizData?.q && Array.isArray(c.quizData.opts) && isQuizApproved(c))
+  if (!pool.length) return { questions: [], indices: [] }
+
+  const attemptCount = (getAttempts(testId) || {}).count || 0
 
   const struggleIndices = []
   const masteredIndices = []
   const neutralIndices = []
 
-  for (let i = 0; i < quiz.questions.length; i++) {
-    const q = quiz.questions[i]
-    const correctText = q?.opts && q.ans != null ? q.opts[q.ans] : ''
-    const cardId = findCardIdForQuestion(setId, correctText, cards, stableCardId)
+  for (let i = 0; i < pool.length; i++) {
+    const card = pool[i]
+    const cardId = stableCardId ? stableCardId(setId, card) : card.id
     const status = cardId && traineeId ? (getMastery(cardId) || {}).status : null
     if (status === 'struggle') struggleIndices.push(i)
     else if (status === 'mastered') masteredIndices.push(i)
     else neutralIndices.push(i)
   }
 
-  const fromStruggle = Math.round(OFFICIAL_QUESTION_COUNT * 0.6)
-  const fromRest = OFFICIAL_QUESTION_COUNT - fromStruggle
+  const count = Math.min(OFFICIAL_QUESTION_COUNT, pool.length)
+  if (count < 10) {
+    console.warn(`Warning: Test ${testId} only has ${pool.length} approved quiz questions`)
+  }
   const allIndices = [...struggleIndices, ...neutralIndices, ...masteredIndices]
   let selected
-  if (isRetake) {
+
+  if (attemptCount === 0) {
+    // Attempt 1: even 50/50 mix of struggle and mastered/neutral
+    const halfStruggle = Math.round(count * 0.5)
+    const halfRest = count - halfStruggle
+    const strugglePool = shuffle([...struggleIndices])
+    const restPool = shuffle([...masteredIndices, ...neutralIndices])
+    const pickStruggle = strugglePool.slice(0, halfStruggle)
+    const pickRest = restPool.slice(0, halfRest)
+    const used = new Set([...pickStruggle, ...pickRest])
+    const need = count - used.size
+    const fill = allIndices.filter((idx) => !used.has(idx))
+    const extra = shuffle(fill).slice(0, need)
+    selected = shuffle([...pickStruggle, ...pickRest, ...extra])
+  } else if (attemptCount === 1) {
+    // Attempt 2: ~80% mastered/neutral (confidence builder), ~20% struggle
+    const fromRest = Math.round(count * 0.8)
+    const fromStruggle = count - fromRest
     const restPool = shuffle([...masteredIndices, ...neutralIndices])
     const strugglePool = shuffle([...struggleIndices])
-    const pickRest = restPool.slice(0, fromStruggle)
-    const pickStruggle = strugglePool.slice(0, fromRest)
+    const pickRest = restPool.slice(0, fromRest)
+    const pickStruggle = strugglePool.slice(0, fromStruggle)
     const used = new Set([...pickRest, ...pickStruggle])
-    const need = OFFICIAL_QUESTION_COUNT - used.size
+    const need = count - used.size
     const fill = allIndices.filter((idx) => !used.has(idx))
     const extra = shuffle(fill).slice(0, need)
     selected = shuffle([...pickRest, ...pickStruggle, ...extra])
   } else {
+    // Attempt 3+: 100% struggle cards (remediation), fill from neutral then mastered if needed
     const strugglePool = shuffle([...struggleIndices])
-    const restPool = shuffle([...neutralIndices, ...masteredIndices])
-    const pickStruggle = strugglePool.slice(0, fromStruggle)
-    const pickRest = restPool.slice(0, fromRest)
-    const used = new Set([...pickStruggle, ...pickRest])
-    const need = OFFICIAL_QUESTION_COUNT - used.size
-    const fill = allIndices.filter((idx) => !used.has(idx))
-    const extra = shuffle(fill).slice(0, need)
-    selected = shuffle([...pickStruggle, ...pickRest, ...extra])
+    if (strugglePool.length >= count) {
+      selected = shuffle(strugglePool.slice(0, count))
+    } else {
+      const remaining = count - strugglePool.length
+      const fillPool = shuffle([...neutralIndices, ...masteredIndices])
+      selected = shuffle([...strugglePool, ...fillPool.slice(0, remaining)])
+    }
   }
-  const questions = selected.map((i) => quiz.questions[i])
-  return { questions, indices: selected }
+  const questions = selected.map((i) => cardToQuestion(pool[i]))
+  const indices = selected
+  return { questions, indices }
 }
 
 /**
  * Infinite Gym: get one next practice question, weighted by mastery; avoid recent (session history).
+ * Uses flashcard pool directly — no fuzzy matching needed.
  * @param {string} testId
  * @param {string} traineeId
  * @param {{ getMastery: (cardId) => { status: string } }} deps
- * @param {number[]} sessionHistory - last N question indices shown (to avoid repeat)
- * @param {object} data - same as buildAdaptiveOfficialTest
+ * @param {number[]} sessionHistory - last N pool indices shown (to avoid repeat)
+ * @param {{ TEST_TO_FLASHCARD_SET: object, FLASHCARD_DATABASE: object, stableCardId: (setId, card) => string }} data
  * @returns {{ question: object, index: number, cardId: string|null }}
  */
 export function getNextInfiniteQuestion(testId, traineeId, deps, sessionHistory, data) {
   const { getMastery } = deps
-  const { QUIZ_DATABASE, TEST_TO_FLASHCARD_SET, FLASHCARD_DATABASE, stableCardId } = data
-  const quiz = QUIZ_DATABASE?.[testId]
-  if (!quiz?.questions?.length) return { question: null, index: -1, cardId: null }
+  const { TEST_TO_FLASHCARD_SET, FLASHCARD_DATABASE, stableCardId } = data
 
   const setId = TEST_TO_FLASHCARD_SET?.[testId]
   const cards = setId ? (FLASHCARD_DATABASE?.[setId] || []) : []
+
+  // Filter to approved quiz-ready cards
+  const pool = cards.filter((c) => c.quizData?.q && Array.isArray(c.quizData.opts) && isQuizApproved(c))
+  if (!pool.length) return { question: null, index: -1, cardId: null }
+
   const recent = new Set(sessionHistory || [])
 
   const weighted = []
-  for (let i = 0; i < quiz.questions.length; i++) {
+  for (let i = 0; i < pool.length; i++) {
     if (recent.has(i)) continue
-    const q = quiz.questions[i]
-    const correctText = q?.opts && q.ans != null ? q.opts[q.ans] : ''
-    const cardId = findCardIdForQuestion(setId, correctText, cards, stableCardId)
+    const card = pool[i]
+    const cardId = stableCardId ? stableCardId(setId, card) : card.id
     const status = cardId && traineeId ? (getMastery(cardId) || {}).status : null
     let w = 10
     if (status === 'struggle') w = 50
@@ -129,11 +156,12 @@ export function getNextInfiniteQuestion(testId, traineeId, deps, sessionHistory,
   }
 
   if (weighted.length === 0) {
-    const idx = Math.floor(Math.random() * quiz.questions.length)
-    return { question: quiz.questions[idx], index: idx, cardId: null }
+    // All questions recently shown — pick random from full pool
+    const idx = Math.floor(Math.random() * pool.length)
+    return { question: cardToQuestion(pool[idx]), index: idx, cardId: pool[idx].id }
   }
   const pick = weighted[Math.floor(Math.random() * weighted.length)]
-  return { question: quiz.questions[pick.i], index: pick.i, cardId: pick.cardId }
+  return { question: cardToQuestion(pool[pick.i]), index: pick.i, cardId: pick.cardId }
 }
 
 export { OFFICIAL_QUESTION_COUNT }

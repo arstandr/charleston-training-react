@@ -4,16 +4,6 @@ import { getTraineeReadinessAggregate } from '../utils/helpers'
 import { getOfficialTestIds } from '../services/testAttemptResets'
 import { PRETTY_TEST_NAMES } from '../data/quizDatabase'
 
-const TEST_ATTEMPTS_KEY = 'testAttempts'
-
-function loadTestAttempts() {
-  try {
-    return JSON.parse(localStorage.getItem(TEST_ATTEMPTS_KEY) || '{}') || {}
-  } catch (_) {
-    return {}
-  }
-}
-
 function getTestScoresForTrainee(testAttempts, traineeId) {
   const officialIds = getOfficialTestIds()
   const parts = []
@@ -25,10 +15,10 @@ function getTestScoresForTrainee(testAttempts, traineeId) {
     const name = PRETTY_TEST_NAMES[testId] || testId
     if (best != null) parts.push(`${name}: ${best}%`)
   }
-  return parts.length ? parts.join(', ') : 'No test scores on this device'
+  return parts.length ? parts.join(', ') : 'No test scores available'
 }
 
-export default function ManagerAiAssessmentModal({ open, traineeId, traineeName, trainingData, onClose }) {
+export default function ManagerAiAssessmentModal({ open, traineeId, traineeName, trainingData, testAttempts: testAttemptsProp, onClose }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [assessment, setAssessment] = useState(null)
@@ -38,10 +28,10 @@ export default function ManagerAiAssessmentModal({ open, traineeId, traineeName,
     return getTraineeReadinessAggregate(trainingData, traineeId)
   }, [traineeId, trainingData])
 
-  const testAttempts = useMemo(() => loadTestAttempts(), [open])
+  const testAttempts = testAttemptsProp || {}
   const testScoresText = useMemo(
     () => (traineeId ? getTestScoresForTrainee(testAttempts, traineeId) : ''),
-    [traineeId, testAttempts, open]
+    [traineeId, testAttempts]
   )
 
   const readinessScore = readiness.average != null ? Math.round((readiness.average / 3) * 5 * 10) / 10 : 0
@@ -69,7 +59,7 @@ export default function ManagerAiAssessmentModal({ open, traineeId, traineeName,
         className="rounded-xl bg-white shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6"
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="text-xl font-bold text-gray-800 mb-1">AI performance assessment</h2>
+        <h2 className="text-xl font-bold text-gray-800 mb-1">AI Assessment</h2>
         <p className="text-sm text-gray-600 mb-4">{traineeName || traineeId}</p>
         <div className="mb-4 text-sm text-gray-700 space-y-1">
           <p><strong>Readiness:</strong> {readinessLabel}</p>

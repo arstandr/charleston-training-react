@@ -27,7 +27,7 @@ export function getLastActivityDate(trainee) {
   }
   const schedule = rec.schedule || {}
   for (const item of Object.values(schedule)) {
-    const d = item.managerSignedAt || item.trainerSignedAt || item.when
+    const d = item.managerSignedAt || item.trainerSignedAt
     if (d) {
       const t = new Date(d).getTime()
       if (!latest || t > latest) latest = t
@@ -67,11 +67,14 @@ export function analyzeTraineeRisk(trainee, options = {}) {
   const now = Date.now()
   const daysSinceActivity = lastActivity
     ? (now - lastActivity.getTime()) / (24 * 60 * 60 * 1000)
-    : 999
-  if (daysSinceActivity > STALL_DAYS_THRESHOLD) {
+    : null
+  if (daysSinceActivity === null) {
+    score += STALL_POINTS
+    drivers.push('No activity recorded')
+  } else if (daysSinceActivity > STALL_DAYS_THRESHOLD) {
     score += STALL_POINTS
     const days = Math.floor(daysSinceActivity)
-    drivers.push(`Stalled ${days} days`)
+    drivers.push(days > 30 ? 'Stalled 30+ days' : `Stalled ${days} days`)
   }
 
   // Test Failure Factor (+15 per fail): score > 0 AND score < 85 for steaks_test, bar_test, wines_test, soups_test

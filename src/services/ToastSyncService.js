@@ -4,7 +4,7 @@
  * - syncTrainersFromToast: fetch employees + jobs, filter by "Trainer", upsert/archive in Firestore trainers collection.
  * - syncTrainerSchedules: fetch shifts for next 21 days, group by employee, cache in localStorage for Schedule Editor.
  */
-import { collection, getDocs, doc, setDoc, query, where } from 'firebase/firestore'
+import { doc, setDoc } from 'firebase/firestore'
 import { db } from '../firebase'
 import { STORE_TO_TOAST_GUID } from '../constants'
 
@@ -54,9 +54,11 @@ function apiGet(path, params = {}, token = null) {
 
 /**
  * Filter employees to only those whose job title contains "Trainer".
+ * If Toast has multiple records for the same person (same firstName+lastName),
+ * picks one: newest modifiedDate wins, tiebreak by lowest externalEmployeeId.
  * @param {Array} employees - raw from Toast
  * @param {Array} jobs - raw from Toast (jobGuid -> title map or list)
- * @returns {Array} filtered employees with resolved jobTitle
+ * @returns {Array} filtered employees with resolved jobTitle (one per person)
  */
 function filterTrainersFromEmployees(employees, jobs) {
   const jobMap = {}
@@ -72,13 +74,16 @@ function filterTrainersFromEmployees(employees, jobs) {
 
   const out = []
   ;(Array.isArray(employees) ? employees : []).forEach((emp) => {
+    if (emp.deleted === true) return // skip terminated employees
     const refs = emp.jobReferences ?? emp.jobs ?? []
     const refList = Array.isArray(refs) ? refs : (refs && refs.length ? refs : [])
     let isTrainer = false
     let jobTitle = ''
     for (const ref of refList) {
       const jGuid = ref.guid ?? ref.jobGuid ?? ref
-      const title = jobMap[String(jGuid)] ?? ''
+      // Prefer jobMap lookup; fall back to title/name embedded on the reference itself
+      // (some Toast jobs are defined at parent level and won't appear in location job list)
+      const title = jobMap[String(jGuid)] ?? ref.title ?? ref.name ?? ''
       if (title && String(title).toLowerCase().includes('trainer')) {
         isTrainer = true
         jobTitle = title
@@ -87,25 +92,70 @@ function filterTrainersFromEmployees(employees, jobs) {
     }
     if (isTrainer) {
       out.push({
-        guid: emp.guid ?? emp.id,
+        guid: emp.guid ?? emp.v2EmployeeGuid ?? emp.id,
+        externalEmployeeId: String(emp.externalEmployeeId ?? emp.external_employee_id ?? emp.employeeNumber ?? '').trim(),
         firstName: emp.firstName ?? emp.first_name ?? '',
         lastName: emp.lastName ?? emp.last_name ?? '',
         email: emp.email ?? '',
         jobTitle: jobTitle || (emp.jobTitle ?? emp.job_title ?? 'Trainer'),
+        modifiedDate: emp.modifiedDate ?? emp.modified_date ?? '',
       })
     }
   })
-  return out
+  return dedupeEmployeesByName(out, 'Trainer')
 }
 
 /**
- * Sync trainers from Toast to Firestore.
+ * Toast keeps duplicate employee records for the same person sometimes (e.g. James Uribe
+ * #4547 + #45471 — both deleted=false). We pick exactly one per (firstName+lastName):
+ *   1. Newest modifiedDate wins.
+ *   2. Tiebreak: lowest numeric externalEmployeeId (the original — dupes are usually re-adds with higher numbers).
+ *   3. Tiebreak: first one seen.
+ * Logs skipped duplicates so they're auditable in the console.
+ */
+function dedupeEmployeesByName(list, label = 'Employee') {
+  const groups = new Map()
+  for (const item of list) {
+    const key = `${(item.firstName || '').trim().toLowerCase()}|${(item.lastName || '').trim().toLowerCase()}`
+    if (!key.replace('|', '')) {
+      // No name at all — keep separate so we don't collapse anonymous records
+      groups.set(`__nameless_${item.guid}`, [item])
+      continue
+    }
+    const bucket = groups.get(key) || []
+    bucket.push(item)
+    groups.set(key, bucket)
+  }
+  const winners = []
+  for (const [key, bucket] of groups.entries()) {
+    if (bucket.length === 1) { winners.push(bucket[0]); continue }
+    bucket.sort((a, b) => {
+      const aMod = a.modifiedDate || ''
+      const bMod = b.modifiedDate || ''
+      if (aMod !== bMod) return aMod < bMod ? 1 : -1 // newer first
+      const aNum = parseInt(a.externalEmployeeId, 10)
+      const bNum = parseInt(b.externalEmployeeId, 10)
+      if (!isNaN(aNum) && !isNaN(bNum) && aNum !== bNum) return aNum - bNum // lower first
+      return 0
+    })
+    const [winner, ...losers] = bucket
+    winners.push(winner)
+    console.warn(`[ToastSync] ${label} dedup — keeping ${winner.firstName} ${winner.lastName} #${winner.externalEmployeeId} (guid=${winner.guid}, modified=${winner.modifiedDate || '?'}); skipping ${losers.length} duplicate Toast record(s):`,
+      losers.map((l) => ({ empId: l.externalEmployeeId, guid: l.guid, modified: l.modifiedDate })))
+  }
+  return winners
+}
+
+/**
+ * Sync trainers from Toast to Firestore + staffAccounts.
  * Fetches employees + jobs, keeps only "Trainer" job titles, upserts to trainers collection; archives those no longer in Toast list.
+ * When currentStaffAccounts is provided, also archives staffAccounts trainer entries no longer in Toast.
  * @param {string} restaurantGuid - Toast location GUID
  * @param {string} storeName - e.g. Westfield (for reference)
- * @returns {Promise<{ count: number, created: number, updated: number, archived: number }>}
+ * @param {Object} [currentStaffAccounts] - optional; if provided, stale trainers will be archived in it
+ * @returns {Promise<{ count: number, created: number, updated: number, archived: number, staffAccounts?: Object }>}
  */
-export async function syncTrainersFromToast(restaurantGuid, storeName) {
+export async function syncTrainersFromToast(restaurantGuid, storeName, currentStaffAccounts = null) {
   const token = await ensureToastToken()
 
   const [empRes, jobRes] = await Promise.all([
@@ -122,22 +172,33 @@ export async function syncTrainersFromToast(restaurantGuid, storeName) {
 
   if (!db) return { count: trainers.length, created: 0, updated: 0, archived: 0 }
 
-  const coll = collection(db, 'trainers')
-  const q = query(
-    where('locationGuid', '==', restaurantGuid)
-  )
-  const snap = await getDocs(q)
+  let docs
+  try {
+    const res = await fetch(`${API_BASE}/getTrainersByLocation?restaurantGuid=${encodeURIComponent(restaurantGuid)}`)
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(json.error || `getTrainersByLocation ${res.status}`)
+    docs = Array.isArray(json.data) ? json.data : []
+  } catch (e) {
+    const wrap = new Error(`ToastSyncService getTrainersByLocation: ${e?.message || e}`)
+    wrap.stack = e?.stack
+    throw wrap
+  }
   const byToastGuid = {}
-  snap.docs.forEach((d) => {
-    const data = d.data()
-    const guid = data.toastGuid ?? d.id
-    if (guid) byToastGuid[String(guid)] = { id: d.id, ref: doc(db, 'trainers', d.id), data }
+  docs.forEach((d) => {
+    const id = d.id
+    const data = { ...d }
+    delete data.id
+    const guid = data.toastGuid ?? id
+    if (guid) byToastGuid[String(guid)] = { id, ref: doc(db, 'trainers', id), data }
   })
 
   const toastGuidsInList = new Set(trainers.map((t) => String(t.guid)))
   let created = 0
   let updated = 0
 
+  // Toast is the source of truth: if Toast says they're active, our system says they're active.
+  // Any local archive flag on a trainer Toast still has is overridden (un-archived).
+  // Toast-side duplicates are handled upstream in dedupeEmployeesByName.
   for (const t of trainers) {
     const guid = String(t.guid ?? '')
     if (!guid) continue
@@ -150,6 +211,7 @@ export async function syncTrainersFromToast(restaurantGuid, storeName) {
       toastGuid: guid,
       locationGuid: restaurantGuid,
       status: 'active',
+      archived: false,
     }
     if (existing) {
       await setDoc(existing.ref, {
@@ -176,7 +238,215 @@ export async function syncTrainersFromToast(restaurantGuid, storeName) {
     archived++
   }
 
-  return { count: trainers.length, created, updated, archived }
+  // Sync staffAccounts: create/update trainer entries + archive stale ones
+  const toastEmpNums = new Set(trainers.map((t) => t.externalEmployeeId).filter(Boolean))
+  let mergedAccounts = currentStaffAccounts ? { ...currentStaffAccounts } : {}
+
+  // Build toastGuid -> existing staffAccounts key map so we can detect when a manager
+  // has renamed an entry's key (e.g. swapped Toast Employee ID for POS access code).
+  // Includes archived entries — Toast = truth, so we un-archive them in place.
+  const guidToExistingKey = {}
+  for (const [k, v] of Object.entries(mergedAccounts)) {
+    if (v?.toastGuid) guidToExistingKey[String(v.toastGuid)] = k
+  }
+
+  // Create/update staffAccounts entry for each active trainer.
+  // Toast = truth: if Toast has them, our system has them. Archive flag overridden.
+  for (const t of trainers) {
+    const empNum = t.externalEmployeeId
+    if (!empNum) continue
+    const existingKey = guidToExistingKey[String(t.guid)]
+    const targetKey = existingKey && existingKey !== empNum ? existingKey : empNum
+    const existing = mergedAccounts[targetKey]
+    // Don't demote admins/owners — those are role assignments, not Toast-derived
+    if (existing && (existing.role === 'admin' || existing.role === 'owner')) continue
+    const name = `${t.firstName} ${t.lastName}`.trim() || 'Trainer'
+    if (existing) {
+      mergedAccounts[targetKey] = { ...existing, role: 'trainer', name, archived: false, toastGuid: t.guid }
+    } else {
+      mergedAccounts[targetKey] = { role: 'trainer', name, store: storeName, archived: false, toastGuid: t.guid }
+    }
+  }
+
+  // Archive staffAccounts trainer entries no longer in Toast (matched by toastGuid or externalEmployeeId)
+  for (const [empNum, info] of Object.entries(mergedAccounts)) {
+    if (info?.archived) continue
+    if (info?.role !== 'trainer') continue
+    if (info?.store !== storeName) continue
+    // Archive if we can definitively match to Toast and they're gone
+    const matchedByGuid = info.toastGuid && !toastGuidsInList.has(String(info.toastGuid))
+    const matchedByEmpNum = empNum && toastEmpNums.size > 0 && !toastEmpNums.has(empNum)
+    if (matchedByGuid || (matchedByEmpNum && !info.toastGuid)) {
+      mergedAccounts[empNum] = { ...info, archived: true }
+      archived++
+    }
+  }
+
+  return { count: trainers.length, created, updated, archived, staffAccounts: mergedAccounts }
+}
+
+/**
+ * Station / system / integration accounts (POS station logins, online-ordering bots, the
+ * Lexi AI integration). These can carry a manager job code in Toast but are not real people.
+ * NOTE: @example.com is NOT a station signal — Toast uses it as a placeholder email for
+ * real employees who have no email on file. Only @toasttab.com / hilexi.ai are system domains.
+ */
+function isStationAccount(name, email) {
+  const n = String(name || '').trim().toLowerCase()
+  const e = String(email || '').trim().toLowerCase()
+  if (/\b(default|online ordering|support|station|login|kiosk)\b/.test(n)) return true
+  if (n.includes('charleston')) return true // e.g. "Charleston's Westfield" = store/POS account
+  if (/@(toasttab\.com|hilexi\.ai)$/.test(e)) return true
+  return false
+}
+
+/**
+ * Filter employees to only those whose job title contains "Manager".
+ * @param {Array} employees - raw from Toast
+ * @param {Array} jobs - raw from Toast
+ * @returns {Array} filtered employees with resolved jobTitle + externalEmployeeId
+ */
+function filterManagersFromEmployees(employees, jobs) {
+  const jobMap = {}
+  if (Array.isArray(jobs)) {
+    jobs.forEach((j) => {
+      const guid = j.guid ?? j.id
+      const title = j.title ?? j.name ?? ''
+      if (guid) jobMap[String(guid)] = title
+    })
+  } else if (jobs && typeof jobs === 'object') {
+    Object.entries(jobs).forEach(([guid, t]) => { jobMap[String(guid)] = typeof t === 'string' ? t : (t?.title ?? t?.name ?? '') })
+  }
+
+  const out = []
+  ;(Array.isArray(employees) ? employees : []).forEach((emp) => {
+    if (emp.deleted === true) return // skip terminated employees
+    const refs = emp.jobReferences ?? emp.jobs ?? []
+    const refList = Array.isArray(refs) ? refs : (refs && refs.length ? refs : [])
+    let isManager = false
+    let jobTitle = ''
+    for (const ref of refList) {
+      const jGuid = ref.guid ?? ref.jobGuid ?? ref
+      // Fall back to title/name on the reference itself — parent-level Toast jobs
+      // won't appear in the location job list but may have title embedded on jobReference
+      const title = jobMap[String(jGuid)] ?? ref.title ?? ref.name ?? ''
+      const lower = String(title).toLowerCase()
+      if (title && (lower.includes('manager') || lower.includes('key hourly') || lower.includes('key manager'))) {
+        isManager = true
+        jobTitle = title
+        break
+      }
+    }
+    if (isManager) {
+      const firstName = emp.firstName ?? emp.first_name ?? ''
+      const lastName = emp.lastName ?? emp.last_name ?? ''
+      // Drop POS station / online-ordering / integration accounts that carry a manager code.
+      if (isStationAccount(`${firstName} ${lastName}`.trim(), emp.email)) return
+      out.push({
+        guid: emp.guid ?? emp.id,
+        firstName,
+        lastName,
+        email: emp.email ?? '',
+        externalEmployeeId: emp.externalEmployeeId ?? emp.external_employee_id ?? emp.employeeNumber ?? '',
+        jobTitle: jobTitle || (emp.jobTitle ?? emp.job_title ?? 'Manager'),
+        modifiedDate: emp.modifiedDate ?? emp.modified_date ?? '',
+      })
+    }
+  })
+  return dedupeEmployeesByName(out, 'Manager')
+}
+
+/**
+ * Sync managers from Toast into staffAccounts.
+ * Fetches employees + jobs, keeps only "Manager" job titles, merges into provided staffAccounts object.
+ * Does NOT persist — caller handles saving to Firestore/localStorage.
+ * @param {string} restaurantGuid - Toast location GUID
+ * @param {string} storeName - e.g. Westfield
+ * @param {Object} currentStaffAccounts - current staffAccounts to merge into
+ * @returns {Promise<{ count: number, created: number, updated: number, staffAccounts: Object }>}
+ */
+export async function syncManagersFromToast(restaurantGuid, storeName, currentStaffAccounts = {}) {
+  const token = await ensureToastToken()
+
+  const [empRes, jobRes] = await Promise.all([
+    apiGet('toastEmployees', { restaurantGuid }, token),
+    apiGet('toastJobs', { restaurantGuid }, token),
+  ])
+
+  const employeesRaw = empRes.data ?? empRes.employees ?? empRes ?? []
+  const jobsRaw = jobRes.data ?? jobRes.jobs ?? jobRes ?? []
+  const managers = filterManagersFromEmployees(
+    Array.isArray(employeesRaw) ? employeesRaw : [employeesRaw],
+    Array.isArray(jobsRaw) ? jobsRaw : jobsRaw
+  )
+
+  const merged = { ...currentStaffAccounts }
+  let created = 0
+  let updated = 0
+  let archived = 0
+  const createdNames = []
+
+  const toastEmpNums = new Set(managers.map((m) => String(m.externalEmployeeId || '').trim()).filter(Boolean))
+  const toastGuids = new Set(managers.map((m) => String(m.guid || '')).filter(Boolean))
+  const toastNames = new Set(managers.map((m) => `${m.firstName} ${m.lastName}`.trim().toLowerCase()).filter(Boolean))
+
+  // toastGuid/name -> existing staffAccounts key. Lets a manager whose Toast record has a
+  // blank or changed Employee ID still match their existing entry (incl. archived ones) —
+  // the manager equivalent of the trainer sync's guid sticky-key guard. Without this, a
+  // Toast record with a blank Employee ID silently archives a real, current manager.
+  const guidToKey = {}
+  const nameToKey = {}
+  for (const [k, v] of Object.entries(merged)) {
+    if (v?.toastGuid) guidToKey[String(v.toastGuid)] = k
+    if (v?.name) nameToKey[String(v.name).trim().toLowerCase()] = k
+  }
+
+  // Toast = truth: a current Manager / Key Hourly / Key Manager job code => active manager.
+  // Local archive flag is overridden. Admin/owner role assignments are preserved.
+  for (const m of managers) {
+    const empNum = String(m.externalEmployeeId || '').trim()
+    const guid = String(m.guid || '')
+    const name = `${m.firstName} ${m.lastName}`.trim() || 'Manager'
+
+    // Resolve a stable key: an existing entry (by guid, then name), else the Toast Employee ID.
+    // A brand-new manager whose Toast record has a blank Employee ID can't be keyed — skip
+    // (caller surfaces these as "needs an Employee ID in Toast").
+    const targetKey = (guid && guidToKey[guid]) || nameToKey[name.toLowerCase()] || empNum
+    if (!targetKey) continue
+
+    const existing = merged[targetKey]
+    if (existing && (existing.role === 'admin' || existing.role === 'owner')) continue
+
+    if (existing) {
+      merged[targetKey] = {
+        ...existing, role: 'manager', name, store: existing.store || storeName,
+        archived: false, toastGuid: existing.toastGuid || guid,
+      }
+      updated++
+    } else {
+      merged[targetKey] = { role: 'manager', name, store: storeName, archived: false, toastGuid: guid }
+      createdNames.push(name)
+      created++
+    }
+  }
+
+  // Archive managers at this store no longer job-coded as a manager in Toast.
+  // Exempt anyone still matched to Toast by guid, Employee ID, or name — Toast keeps the same
+  // person under separate per-store records, so a single entry's guid won't match every sync.
+  for (const [empNum, info] of Object.entries(merged)) {
+    if (info?.archived) continue
+    if (info?.role === 'admin' || info?.role === 'owner') continue
+    if (info?.role !== 'manager') continue
+    if (info?.store !== storeName) continue
+    const matched = (info.toastGuid && toastGuids.has(String(info.toastGuid))) ||
+      toastEmpNums.has(empNum) ||
+      (info.name && toastNames.has(String(info.name).trim().toLowerCase()))
+    if (matched) continue
+    merged[empNum] = { ...info, archived: true }
+    archived++
+  }
+
+  return { count: managers.length, created, updated, archived, createdNames, staffAccounts: merged }
 }
 
 const TRAINER_SCHEDULES_KEY_PREFIX = 'trainerSchedules_'
@@ -230,7 +500,7 @@ export async function syncTrainerSchedules(restaurantGuid, storeName) {
   return {
     shiftCount: shifts.length,
     startDate: startDate.slice(0, 10),
-    endDate: endDate.toISOString().slice(0, 10),
+    endDate: endDate.slice(0, 10),
   }
 }
 

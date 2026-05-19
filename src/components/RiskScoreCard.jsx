@@ -3,6 +3,7 @@
  */
 import { useState } from 'react'
 import { getCertificationProgress } from '../utils/helpers'
+import { getStoreDisplayName } from '../constants'
 
 function getLastActivityDate(rec) {
   let latest = null
@@ -65,7 +66,7 @@ export default function RiskScoreCard({ trainee, store }) {
   const score = computeRiskScore(trainee)
   const prog = getCertificationProgress(trainee)
   const last = getLastActivityDate(trainee)
-  const level = score >= 50 ? 'high' : score >= 25 ? 'medium' : 'low'
+  const level = score > 60 ? 'high' : score > 30 ? 'medium' : 'low'
   const color = level === 'high' ? 'text-red-600' : level === 'medium' ? 'text-amber-600' : 'text-green-600'
   const breakdown = getRiskBreakdown(trainee)
 
@@ -74,7 +75,7 @@ export default function RiskScoreCard({ trainee, store }) {
       <div className="flex items-center justify-between">
         <div>
           <div className="font-semibold text-gray-800">{trainee.name || `#${trainee.employeeNumber || trainee.id}`}</div>
-          <div className="text-xs text-gray-500">{store || trainee.store || '—'}</div>
+          <div className="text-xs text-gray-500">{(store || trainee.store) ? getStoreDisplayName(store || trainee.store) : '—'}</div>
         </div>
         <div className={`text-2xl font-bold ${color}`}>{score}</div>
       </div>

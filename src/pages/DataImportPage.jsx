@@ -1,7 +1,6 @@
 import { useState, useMemo } from 'react'
-import { doc, getDoc, setDoc } from 'firebase/firestore'
-import { db } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
+import { getFromFirestore, saveToFirestore } from '../utils/firestore'
 import { useConfirm } from '../contexts/ConfirmContext'
 import AppHeader from '../components/AppHeader'
 import OwnerNavBar from '../components/OwnerNavBar'
@@ -93,9 +92,7 @@ export default function DataImportPage() {
     setLoading(true)
     setError(null)
     try {
-      const ref = doc(db, 'config', target)
-      const snap = await getDoc(ref)
-      const existing = snap.exists() ? snap.data() : {}
+      const existing = (await getFromFirestore('config', target)) || {}
       let next
       if (target === 'staffAccounts') {
         next = { ...existing }
@@ -111,7 +108,7 @@ export default function DataImportPage() {
         })
       }
       const payload = target === 'staffAccounts' ? next : { data: next }
-      await setDoc(ref, payload, { merge: true })
+      await saveToFirestore('config', target, payload)
       setExportStatus('Written successfully.')
     } catch (err) {
       setError(err.message || 'Write failed')
@@ -124,14 +121,15 @@ export default function DataImportPage() {
     setExportStatus('Exporting…')
     setError(null)
     try {
-      const configRef = doc(db, 'config', 'trainingData')
-      const staffRef = doc(db, 'config', 'staffAccounts')
-      const [trainingSnap, staffSnap] = await Promise.all([getDoc(configRef), getDoc(staffRef)])
+      const [trainingDoc, staffDoc] = await Promise.all([
+        getFromFirestore('config', 'trainingData'),
+        getFromFirestore('config', 'staffAccounts'),
+      ])
       const out = {
         exportedAt: new Date().toISOString(),
         config: {
-          trainingData: trainingSnap.exists() ? trainingSnap.data() : null,
-          staffAccounts: staffSnap.exists() ? staffSnap.data() : null,
+          trainingData: trainingDoc || null,
+          staffAccounts: staffDoc || null,
         },
       }
       const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' })

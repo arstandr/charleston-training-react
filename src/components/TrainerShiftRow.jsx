@@ -10,14 +10,18 @@ export default function TrainerShiftRow({ row, onOpenDetail, onRateSignOff, heal
     managerSigned,
     testsStatus,
     checklistComplete = true,
+    checklistProgress,
     failedTestTitles = [],
   } = row
   const whenStr = when ? formatWhenHuman(when) : '—'
   const testsOk = testsStatus === 'passed'
-  const canSignOff = testsOk && checklistComplete && !trainerSigned
+  const canSignOff = testsOk && !trainerSigned
   const blockers = []
-  if (!testsOk && failedTestTitles?.length) blockers.push(...failedTestTitles.map((t) => `Failed: ${t}`))
-  if (!checklistComplete) blockers.push('Checklist incomplete')
+  if (!testsOk && failedTestTitles?.length) blockers.push(...failedTestTitles.map((t) => `Needs: ${t}`))
+  if (!checklistComplete) {
+    const prog = checklistProgress
+    blockers.push(prog?.total ? `Checklist: ${prog.checked}/${prog.total}` : 'Checklist incomplete')
+  }
   const quizAvg = health?.quizAvg
 
   const handleRowClick = (e) => {
@@ -45,7 +49,7 @@ export default function TrainerShiftRow({ row, onOpenDetail, onRateSignOff, heal
         {blockers.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {blockers.map((b) => (
-              <span key={b} className="inline-block rounded px-2 py-0.5 text-xs font-medium bg-red-100 text-red-800">
+              <span key={b} className="inline-block rounded px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-800">
                 {b}
               </span>
             ))}
@@ -64,7 +68,7 @@ export default function TrainerShiftRow({ row, onOpenDetail, onRateSignOff, heal
               checklistComplete ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'
             }`}
           >
-            Checklist: {checklistComplete ? '✓' : '—'}
+            Checklist: {checklistComplete ? '✓' : checklistProgress?.total ? `${checklistProgress.checked}/${checklistProgress.total}` : '—'}
           </span>
           <span
             className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
@@ -88,24 +92,20 @@ export default function TrainerShiftRow({ row, onOpenDetail, onRateSignOff, heal
             Open Details
           </button>
         )}
-        {onRateSignOff && (
+        {onRateSignOff && !trainerSigned && (
           <button
             type="button"
-            className="btn btn-small"
+            className={`btn btn-small${!canSignOff ? ' btn-secondary' : ''}`}
             onClick={() => onRateSignOff(row)}
-            title={
-              !canSignOff
-                ? !testsOk
-                  ? 'Complete required tests first'
-                  : !checklistComplete
-                    ? 'Complete checklist first'
-                    : 'Already signed'
-                : 'Rate & sign off'
-            }
-            style={!canSignOff ? { opacity: 0.8 } : undefined}
+            title={!canSignOff ? 'Complete required tests first' : 'Rate & sign off'}
           >
             Rate &amp; Sign Off
           </button>
+        )}
+        {trainerSigned && (
+          <span className="inline-flex items-center rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-800">
+            Signed ✓
+          </span>
         )}
       </div>
     </div>

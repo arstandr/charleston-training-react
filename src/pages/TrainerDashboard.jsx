@@ -1,9 +1,9 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import AppHeader from '../components/AppHeader'
 import ShiftDetailView from '../components/ShiftDetailView'
 import TrainerSignoffModal from '../components/TrainerSignoffModal'
 import TrainerShiftRow from '../components/TrainerShiftRow'
-import TestResultDetailModal from '../components/TestResultDetailModal'
+import TestReviewModal from '../components/TestReviewModal'
 import { useAuth } from '../contexts/AuthContext'
 import { useTrainingData } from '../hooks/useTrainingData'
 import { useStaffAccounts } from '../hooks/useStaffAccounts'
@@ -16,6 +16,7 @@ import {
   signShiftAsTrainer,
   formatWhenHuman,
   shiftRequiredTestsPassed,
+  isRequiredChecklistComplete,
   isSameCalendarDay,
   getTrainerEffectiveness,
   loadTestAttemptsFromStorage,
@@ -23,7 +24,10 @@ import {
   getTraineeHealthSummary,
 } from '../utils/helpers'
 import { SHIFT_META } from '../constants'
+import { PRETTY_TEST_NAMES, TESTS } from '../data/quizDatabase'
 import { listTrainees } from '../hooks/useTrainingData'
+import TrainerHealthView from '../components/TrainerHealthView'
+import { loadTestResults } from '../services/quizAttemptsService'
 
 const TRAINER_TODAY_ONLY_KEY = 'trainerTodayOnly'
 const BROWSE_PAGE_SIZE = 30
@@ -46,6 +50,8 @@ export default function TrainerDashboard() {
   })
   const [browsePage, setBrowsePage] = useState(1)
   const [viewResultAttempt, setViewResultAttempt] = useState(null)
+  const [healthView, setHealthView] = useState(false)
+  const [signoffConfirm, setSignoffConfirm] = useState(null)
 
   const store = currentUser?.store || 'Westfield'
   const empNum = currentUser?.empNum
@@ -62,11 +68,38 @@ export default function TrainerDashboard() {
     } catch (_) {}
   }
 
-  const testAttempts = useMemo(() => loadTestAttemptsFromStorage(), [trainingData])
+  // Load test results from Firestore so trainer sees trainee test data (not just own localStorage)
+  const [testAttempts, setTestAttempts] = useState(() => loadTestAttemptsFromStorage())
+  const assignedTraineeIds = useMemo(() => {
+    const shifts = getTrainerAssignedShifts(trainingData, empNum, store)
+    return [...new Set(shifts.map((r) => r.traineeId))]
+  }, [trainingData, empNum, store])
+
+  useEffect(() => {
+    if (!assignedTraineeIds.length) return
+    let cancelled = false
+    Promise.all(
+      assignedTraineeIds.map((tid) =>
+        loadTestResults(tid).then((results) => ({ tid, results }))
+      )
+    ).then((all) => {
+      if (cancelled) return
+      const merged = {}
+      for (const { tid, results } of all) {
+        for (const [testId, data] of Object.entries(results)) {
+          merged[`${tid}_${testId}`] = data
+        }
+      }
+      // Also merge any localStorage data as fallback
+      const local = loadTestAttemptsFromStorage()
+      setTestAttempts({ ...local, ...merged })
+    })
+    return () => { cancelled = true }
+  }, [assignedTraineeIds])
 
   const assignedShifts = useMemo(
-    () => getTrainerAssignedShifts(trainingData, empNum, store),
-    [trainingData, empNum, store]
+    () => getTrainerAssignedShifts(trainingData, empNum, store, testAttempts),
+    [trainingData, empNum, store, testAttempts]
   )
   const filteredAssigned = useMemo(
     () => (todayOnly ? assignedShifts.filter((r) => isSameCalendarDay(r.when)) : assignedShifts),
@@ -88,8 +121,8 @@ export default function TrainerDashboard() {
     [trainingData, empNum, store, testAttempts]
   )
   const recentTestAttempts = useMemo(
-    () => getRecentTestAttemptsForTrainer(trainingData, empNum, store, 15),
-    [trainingData, empNum, store]
+    () => getRecentTestAttemptsForTrainer(trainingData, empNum, store, 15, testAttempts),
+    [trainingData, empNum, store, testAttempts]
   )
 
   const toSignCount = useMemo(() => assignedShifts.filter((r) => !r.trainerSigned).length, [assignedShifts])
@@ -102,7 +135,8 @@ export default function TrainerDashboard() {
     [toSignCount, pendingClaims.length, recentTestAttempts.length]
   )
 
-  const focusRow = filteredAssigned[0] || null
+  // Always show the next upcoming shift regardless of today-only filter
+  const focusRow = assignedShifts[0] || null
   const focusHealth = focusRow ? getTraineeHealthSummary(focusRow.traineeId, trainingData?.[focusRow.traineeId], testAttempts) : null
 
   const browseTraineesWithMeta = useMemo(() => {
@@ -138,6 +172,23 @@ export default function TrainerDashboard() {
     return m
   }, [filteredAssigned, trainingData, testAttempts])
 
+  const OFFICIAL_TEST_IDS = TESTS.filter((t) => t.id !== 'bonus_test').map((t) => t.id)
+
+  const handleToggleReadyToTest = (tid, testId, value) => {
+    const next = {
+      ...trainingData,
+      [tid]: {
+        ...trainingData[tid],
+        readyToTest: {
+          ...(trainingData[tid]?.readyToTest || {}),
+          [testId]: value,
+        },
+      },
+    }
+    setTrainingData(next)
+    saveTrainingData(next)
+  }
+
   const handleClaim = (row) => {
     const next = claimShift(trainingData, row.traineeId, row.shiftKey, empNum)
     setTrainingData(next)
@@ -155,6 +206,8 @@ export default function TrainerDashboard() {
     )
     setTrainingData(next)
     saveTrainingData(next)
+    setSignoffConfirm(`Signed off on ${signoffRow.traineeName} · ${signoffRow.shiftLabel}`)
+    setTimeout(() => setSignoffConfirm(null), 4000)
     setSignoffRow(null)
   }
 
@@ -182,7 +235,7 @@ export default function TrainerDashboard() {
       return null
     }
     const item = rec?.schedule?.[shiftKey] || {}
-    const testsOk = shiftRequiredTestsPassed(rec, shiftKey, traineeId)
+    const testsOk = shiftRequiredTestsPassed(rec, shiftKey, traineeId, testAttempts)
     const detailCanSignOff =
       testsOk && !item.trainerSignedAt && String(item.trainer) === String(empNum)
 
@@ -202,6 +255,7 @@ export default function TrainerDashboard() {
             trainingData={trainingData}
             setTrainingData={setTrainingData}
             saveTrainingData={saveTrainingData}
+            showAuditButton={['admin','manager','owner'].includes((currentUser?.role || '').toLowerCase())}
             onRateSignOff={
               detailCanSignOff
                 ? () =>
@@ -210,10 +264,60 @@ export default function TrainerDashboard() {
                       shiftKey,
                       traineeName: rec?.name || `Trainee ${traineeId}`,
                       shiftLabel: (SHIFT_META && SHIFT_META[shiftKey]?.label) || shiftKey,
+                      testsStatus: 'passed',
+                      checklistComplete: isRequiredChecklistComplete(rec, shiftKey),
+                      trainerSigned: false,
+                      failedTestTitles: [],
                     })
                 : undefined
             }
           />
+        </div>
+      {signoffConfirm && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 rounded-xl bg-green-700 px-6 py-3 text-white font-medium shadow-lg text-sm">
+          ✓ {signoffConfirm}
+        </div>
+      )}
+      {signoffRow && (
+        <TrainerSignoffModal
+          open
+          traineeId={signoffRow.traineeId}
+          traineeName={signoffRow.traineeName}
+          shiftKey={signoffRow.shiftKey}
+          shiftLabel={signoffRow.shiftLabel}
+          canSignOff={signoffRow.testsStatus === 'passed' && !signoffRow.trainerSigned}
+          failedTestTitles={signoffRow.failedTestTitles || []}
+          onSave={handleSaveSignoff}
+          onClose={() => setSignoffRow(null)}
+        />
+      )}
+      </>
+    )
+  }
+
+  const trainerUid = currentUser?.uid || currentUser?.id
+
+  if (healthView) {
+    return (
+      <>
+        <AppHeader />
+        <div className="container mx-auto max-w-4xl px-4 pb-8">
+          <div className="content-area">
+            <button
+              type="button"
+              className="mb-4 text-sm text-[var(--color-primary)] hover:underline"
+              onClick={() => setHealthView(false)}
+            >
+              ← Back to dashboard
+            </button>
+            <TrainerHealthView
+              trainerUid={trainerUid}
+              empNum={empNum}
+              trainingData={trainingData}
+              store={store}
+              staffAccounts={staffAccounts}
+            />
+          </div>
         </div>
       </>
     )
@@ -224,32 +328,55 @@ export default function TrainerDashboard() {
       <AppHeader />
       <div className="container mx-auto max-w-4xl px-4 pb-8">
         <div className="content-area">
-          <h2 className="mb-2 text-xl font-bold text-gray-800">Trainer Dashboard</h2>
-          <p className="mb-4 text-sm text-gray-600">{store}</p>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="mb-2 text-xl font-bold text-gray-800">Trainer Dashboard</h2>
+              <p className="text-sm text-gray-600">{store}</p>
+            </div>
+            <button
+              type="button"
+              className="btn btn-small"
+              onClick={() => setHealthView(true)}
+            >
+              Health
+            </button>
+          </div>
 
           {/* Needs you / summary chips */}
           <div className="mb-4 flex flex-wrap gap-2">
             {needsYouChips.toSign > 0 && (
-              <span className="rounded-full bg-amber-100 px-3 py-1 text-sm font-medium text-amber-800">
+              <button
+                type="button"
+                onClick={() => document.getElementById('assigned-shifts')?.scrollIntoView({ behavior: 'smooth' })}
+                className="rounded-full bg-amber-100 px-3 py-1 text-sm font-medium text-amber-800 cursor-pointer hover:bg-amber-200 transition-colors"
+              >
                 {needsYouChips.toSign} to sign
-              </span>
+              </button>
             )}
             {needsYouChips.pending > 0 && (
-              <span className="rounded-full bg-blue-100 px-3 py-1 text-sm font-medium text-blue-800">
+              <button
+                type="button"
+                onClick={() => document.getElementById('pending-claims')?.scrollIntoView({ behavior: 'smooth' })}
+                className="rounded-full bg-blue-100 px-3 py-1 text-sm font-medium text-blue-800 cursor-pointer hover:bg-blue-200 transition-colors"
+              >
                 {needsYouChips.pending} pending approval
-              </span>
+              </button>
             )}
             {needsYouChips.newResults > 0 && (
-              <span className="rounded-full bg-green-100 px-3 py-1 text-sm font-medium text-green-800">
+              <button
+                type="button"
+                onClick={() => document.getElementById('recent-tests')?.scrollIntoView({ behavior: 'smooth' })}
+                className="rounded-full bg-green-100 px-3 py-1 text-sm font-medium text-green-800 cursor-pointer hover:bg-green-200 transition-colors"
+              >
                 {needsYouChips.newResults} test result(s)
-              </span>
+              </button>
             )}
           </div>
 
           {/* Trainer sync status (optional) */}
           {(trainers.length > 0 || lastSync) && (
             <p className="mb-4 text-xs text-gray-500">
-              {trainers.length > 0 && <span>{trainers.length} active trainer(s) at this store</span>}
+              {trainers.length > 0 && <span>{trainers.length} active {trainers.length === 1 ? 'trainer' : 'trainers'} at this store</span>}
               {lastSync && (
                 <span>
                   {trainers.length > 0 ? ' · ' : ''}
@@ -278,8 +405,12 @@ export default function TrainerDashboard() {
             <div className="flex items-baseline gap-4">
               <span className="text-3xl font-bold text-gray-800">{effectiveness.score}</span>
               <span className="text-gray-600">/ 100</span>
-              <span className="text-sm text-gray-500">{effectiveness.traineeCount} trainee(s)</span>
+              <span className="text-sm text-gray-500">{effectiveness.traineeCount} {effectiveness.traineeCount === 1 ? 'trainee' : 'trainees'}</span>
             </div>
+            <p className="mt-2 text-xs text-gray-500">
+              Based on your trainees' test pass rates, checklist completion, and readiness scores.
+              {effectiveness.score >= 80 ? ' Great work!' : effectiveness.score >= 60 ? ' Room to improve — focus on test prep and checklist follow-through.' : ' Needs attention — work closely with trainees on test preparation.'}
+            </p>
           </section>
 
           {/* Priority: Next Up focus card */}
@@ -287,6 +418,9 @@ export default function TrainerDashboard() {
             <section className="mb-6 rounded-xl border-2 border-[var(--color-primary)] bg-[var(--color-primary)]/5 p-4">
               <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-gray-600">
                 Priority: Next up
+                {todayOnly && !isSameCalendarDay(focusRow.when) && (
+                  <span className="ml-2 font-normal normal-case tracking-normal text-xs text-gray-500">(not today)</span>
+                )}
               </h3>
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
@@ -310,8 +444,42 @@ export default function TrainerDashboard() {
                         focusRow.checklistComplete ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'
                       }`}
                     >
-                      Checklist: {focusRow.checklistComplete ? '✓' : '—'}
+                      Checklist: {focusRow.checklistComplete ? '✓' : focusRow.checklistProgress?.total ? `${focusRow.checklistProgress.checked}/${focusRow.checklistProgress.total}` : '—'}
                     </span>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                        focusRow.trainerSigned ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
+                      }`}
+                    >
+                      Trainer: {focusRow.trainerSigned ? '✓' : '—'}
+                    </span>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                        focusRow.managerSigned ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
+                      }`}
+                    >
+                      Manager: {focusRow.managerSigned ? '✓' : '—'}
+                    </span>
+                  </div>
+
+                  {/* Test Readiness toggles */}
+                  <div className="mt-3">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Clear for test</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {OFFICIAL_TEST_IDS.map((tid) => {
+                        const ready = trainingData?.[focusRow.traineeId]?.readyToTest?.[tid] ?? false
+                        return (
+                          <button
+                            key={tid}
+                            type="button"
+                            onClick={() => handleToggleReadyToTest(focusRow.traineeId, tid, !ready)}
+                            className={`rounded-full border px-2 py-0.5 text-xs font-medium transition-colors ${ready ? 'bg-green-100 border-green-300 text-green-800' : 'bg-white border-gray-300 text-gray-500 hover:border-gray-400'}`}
+                          >
+                            {PRETTY_TEST_NAMES[tid] || tid} {ready ? '✓' : '+'}
+                          </button>
+                        )
+                      })}
+                    </div>
                   </div>
                 </div>
                 <div className="flex gap-2">
@@ -322,10 +490,20 @@ export default function TrainerDashboard() {
                   >
                     Open Details
                   </button>
-                  {focusRow.testsStatus === 'passed' && focusRow.checklistComplete && !focusRow.trainerSigned && (
-                    <button type="button" className="btn btn-small" onClick={() => setSignoffRow(focusRow)}>
+                  {!focusRow.trainerSigned && (
+                    <button
+                      type="button"
+                      className={`btn btn-small${focusRow.testsStatus !== 'passed' ? ' btn-secondary' : ''}`}
+                      onClick={() => setSignoffRow(focusRow)}
+                      title={focusRow.testsStatus !== 'passed' ? 'Complete required tests first' : 'Rate & sign off'}
+                    >
                       Rate &amp; Sign Off
                     </button>
+                  )}
+                  {focusRow.trainerSigned && (
+                    <span className="inline-flex items-center rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-800">
+                      Signed ✓
+                    </span>
                   )}
                 </div>
               </div>
@@ -334,32 +512,43 @@ export default function TrainerDashboard() {
 
           {/* My Assigned Shifts */}
           <section className="mb-8">
-            <h3 className="mb-3 border-l-4 border-l-[var(--color-primary)] pl-3 text-sm font-bold uppercase tracking-wide text-gray-500">
+            <h3 id="assigned-shifts" className="mb-3 border-l-4 border-l-[var(--color-primary)] pl-3 text-sm font-bold uppercase tracking-wide text-gray-500">
               My assigned shifts
             </h3>
-            {filteredAssigned.length === 0 ? (
-              <p className="text-gray-500">
-                {assignedShifts.length === 0 ? 'No shifts assigned to you yet.' : 'No shifts for the selected filter.'}
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {filteredAssigned.map((row) => (
-                  <TrainerShiftRow
-                    key={`${row.traineeId}-${row.shiftKey}`}
-                    row={row}
-                    health={healthByTrainee[row.traineeId]}
-                    onOpenDetail={handleOpenDetail}
-                    onRateSignOff={setSignoffRow}
-                  />
-                ))}
-              </div>
-            )}
+            {(() => {
+              const displayShifts = focusRow
+                ? filteredAssigned.filter((r) => !(r.traineeId === focusRow.traineeId && r.shiftKey === focusRow.shiftKey))
+                : filteredAssigned
+              return displayShifts.length === 0 ? (
+                <p className="text-gray-500">
+                  {assignedShifts.length === 0
+                    ? 'No shifts assigned to you yet.'
+                    : assignedShifts.length === 1 && focusRow
+                      ? 'Your only assigned shift is shown above in Priority.'
+                      : todayOnly
+                        ? `No other shifts scheduled for today. Next shift: ${assignedShifts.find((r) => !isSameCalendarDay(r.when))?.when ? formatWhenHuman(assignedShifts.find((r) => !isSameCalendarDay(r.when)).when) : 'none upcoming'}.`
+                        : 'No shifts for the selected filter.'}
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {displayShifts.map((row) => (
+                    <TrainerShiftRow
+                      key={`${row.traineeId}-${row.shiftKey}`}
+                      row={row}
+                      health={healthByTrainee[row.traineeId]}
+                      onOpenDetail={handleOpenDetail}
+                      onRateSignOff={setSignoffRow}
+                    />
+                  ))}
+                </div>
+              )
+            })()}
           </section>
 
           {/* Pending Claims (mine) */}
           {pendingClaims.length > 0 && (
             <section className="mb-8">
-              <h3 className="mb-3 border-l-4 border-l-amber-500 pl-3 text-sm font-bold uppercase tracking-wide text-gray-500">
+              <h3 id="pending-claims" className="mb-3 border-l-4 border-l-amber-500 pl-3 text-sm font-bold uppercase tracking-wide text-gray-500">
                 My pending claims
               </h3>
               <p className="mb-2 text-sm text-gray-600">Waiting for manager approval.</p>
@@ -373,6 +562,9 @@ export default function TrainerDashboard() {
                     <span className="text-sm text-gray-600">
                       {row.icon} {row.shiftLabel} · {formatWhenHuman(row.when)}
                     </span>
+                    <span className="rounded-full bg-amber-200 px-2 py-0.5 text-xs font-medium text-amber-800">
+                      Awaiting manager approval
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -380,11 +572,11 @@ export default function TrainerDashboard() {
           )}
 
           {/* Recent Test Completions (Your Trainees) */}
-          {recentTestAttempts.length > 0 && (
-            <section className="mb-8">
-              <h3 className="mb-3 border-l-4 border-l-green-500 pl-3 text-sm font-bold uppercase tracking-wide text-gray-500">
-                Recent test completions
-              </h3>
+          <section className="mb-8">
+            <h3 id="recent-tests" className="mb-3 border-l-4 border-l-green-500 pl-3 text-sm font-bold uppercase tracking-wide text-gray-500">
+              Recent test completions
+            </h3>
+            {recentTestAttempts.length > 0 ? (
               <ul className="space-y-2">
                 {recentTestAttempts.slice(0, 10).map((a, i) => (
                   <li
@@ -402,13 +594,15 @@ export default function TrainerDashboard() {
                       className="btn btn-small btn-secondary"
                       onClick={() => setViewResultAttempt(a)}
                     >
-                      View answers
+                      View result
                     </button>
                   </li>
                 ))}
               </ul>
-            </section>
-          )}
+            ) : (
+              <p className="text-sm text-gray-500">No test results yet for your assigned trainees.</p>
+            )}
+          </section>
 
           {/* Coverage Needed */}
           <section className="mb-8">
@@ -479,7 +673,19 @@ export default function TrainerDashboard() {
                     {browsePaginated.map((t) => (
                       <div
                         key={t.id}
-                        className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-gray-200 bg-white px-3 py-3"
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => {
+                          if (t.nextShift && trainingData?.[t.id]) {
+                            setDetailShift({ traineeId: t.id, shiftKey: t.nextShift.shiftKey })
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if ((e.key === 'Enter' || e.key === ' ') && t.nextShift && trainingData?.[t.id]) {
+                            setDetailShift({ traineeId: t.id, shiftKey: t.nextShift.shiftKey })
+                          }
+                        }}
+                        className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border border-gray-200 bg-white px-3 py-3${t.nextShift ? ' cursor-pointer hover:border-gray-300 hover:bg-gray-50' : ''}`}
                       >
                         <div>
                           <span className="font-medium text-gray-800">{t.name || t.id}</span>
@@ -495,6 +701,9 @@ export default function TrainerDashboard() {
                             </span>
                           )}
                         </div>
+                        {t.nextShift && (
+                          <span className="text-xs text-gray-400">View shift →</span>
+                        )}
                       </div>
                     ))}
                     {hasMoreBrowse && (
@@ -515,11 +724,18 @@ export default function TrainerDashboard() {
       </div>
 
       {viewResultAttempt && (
-        <TestResultDetailModal
-          open
-          attempt={viewResultAttempt}
+        <TestReviewModal
+          traineeId={viewResultAttempt.traineeId}
+          testId={viewResultAttempt.testId}
+          traineeName={viewResultAttempt.traineeName}
           onClose={() => setViewResultAttempt(null)}
         />
+      )}
+
+      {signoffConfirm && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 rounded-xl bg-green-700 px-6 py-3 text-white font-medium shadow-lg text-sm">
+          ✓ {signoffConfirm}
+        </div>
       )}
 
       {signoffRow && (
@@ -529,7 +745,8 @@ export default function TrainerDashboard() {
           traineeName={signoffRow.traineeName}
           shiftKey={signoffRow.shiftKey}
           shiftLabel={signoffRow.shiftLabel}
-          canSignOff={signoffRow.testsStatus === 'passed' && signoffRow.checklistComplete && !signoffRow.trainerSigned}
+          canSignOff={signoffRow.testsStatus === 'passed' && !signoffRow.trainerSigned}
+          failedTestTitles={signoffRow.failedTestTitles || []}
           onSave={handleSaveSignoff}
           onClose={() => setSignoffRow(null)}
         />

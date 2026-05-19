@@ -14,6 +14,7 @@ export default function TrainerSignoffModal({
   shiftKey,
   shiftLabel,
   canSignOff = true,
+  failedTestTitles = [],
   onSave,
   onClose,
 }) {
@@ -56,9 +57,14 @@ export default function TrainerSignoffModal({
         <p className="mt-1 text-sm text-gray-600">
           {shiftLabel || shiftKey} · {traineeName || traineeId}
         </p>
+        <p className="mt-1 text-xs text-gray-500">
+          Rate 1–5 in each area. This overall readiness rating determines the trainee&apos;s Readiness Score on the Manager Dashboard (separate from the 1–3 Performance Appraisal).
+        </p>
         {!canSignOff && (
           <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-            Trainee must pass the required test(s) and complete the checklist before you can sign off.
+            {failedTestTitles.length > 0
+              ? `${traineeName || 'Trainee'} must pass the following test${failedTestTitles.length > 1 ? 's' : ''} before you can sign off: ${failedTestTitles.join(', ')}`
+              : 'Trainee must pass the required test(s) before you can sign off.'}
           </div>
         )}
         {canSignOff && (
@@ -99,6 +105,9 @@ export default function TrainerSignoffModal({
               {notes.length} / {MAX_NOTES}
             </div>
           </div>
+          {(knowledge < 1 || execution < 1 || confidence < 1) && (
+            <p className="text-sm text-amber-600 font-medium">Rate all three areas before signing off.</p>
+          )}
           <div className="flex gap-2">
             <button type="button" className="btn btn-secondary" onClick={onClose}>
               Cancel

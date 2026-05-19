@@ -1,34 +1,36 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-const FLASHCARD_SESSION_KEY = 'flashcardSession'
 const PRACTICE_SESSION_KEY = 'practiceTestSession'
 import { useAuth } from '../contexts/AuthContext'
 import AppHeader from '../components/AppHeader'
 import TraineeNavTabs from '../components/TraineeNavTabs'
 import CertificationProgress from '../components/CertificationProgress'
-import TrainingHealth from '../components/TrainingHealth'
 import TraineeShiftCard from '../components/TraineeShiftCard'
 import ShiftDetailView from '../components/ShiftDetailView'
 import TrainerRatingModal from '../components/TrainerRatingModal'
 import VerbalCertChecklistModal from '../components/VerbalCertChecklistModal'
 import { useTrainingData } from '../hooks/useTrainingData'
 import { useStaffAccounts } from '../hooks/useStaffAccounts'
+import { useToastStoreGuids } from '../hooks/useToastStoreGuids'
 import { useTestAttempts } from '../hooks/useTestAttempts'
+import { getTrainersByLocation } from '../services/trainerService'
 import { useFlashcardMastery } from '../hooks/useFlashcardMastery'
-import { getCoachTip } from '../services/ai'
-import { REQUIRED_SHIFT_KEYS, SHIFT_META } from '../constants'
-import { TESTS } from '../data/quizDatabase'
-import { FLASHCARD_SETS } from '../data/flashcardDatabase'
+import { REQUIRED_SHIFT_KEYS, SHIFT_META, getStoreDisplayName } from '../constants'
+import { getAllFlashcardSets } from '../services/flashcardService'
 import {
   getCertificationProgress,
-  getTrainingHealth,
   getNextShift,
   formatWhenHuman,
   isShiftComplete,
   getShiftRequiredTestIds,
 } from '../utils/helpers'
 import SkeletonCards from '../components/SkeletonCard'
+import HealthSummaryCard from '../components/HealthSummaryCard'
+import WeaknessPracticePanel from '../components/WeaknessPracticePanel'
+import TestReadinessPanel from '../components/TestReadinessPanel'
+import { getPendingChecks } from '../services/postShiftCheckService'
+import { getVerbalCertPractice } from '../services/verbalCertPracticeService'
 
 const SHIFT_ORDER = ['follow', 'rev1', 'rev2', 'rev3', 'rev4', 'foodrun', 'cert']
 
@@ -36,53 +38,93 @@ export default function TraineeDashboard() {
   const navigate = useNavigate()
   const { currentUser } = useAuth()
   const traineeId = currentUser?.traineeId || currentUser?.id
-  const { trainingData, setTrainingData, saveTrainingData, trainingDataLoading } = useTrainingData()
+  const { trainingData, setTrainingData, saveTrainingData, trainingDataLoading, trainingDataFetchedAt } = useTrainingData()
   const { staffAccounts } = useStaffAccounts()
-  const { getBestScore, isTestPassed } = useTestAttempts(traineeId)
+  const { getRestaurantGuid } = useToastStoreGuids()
+  const [firestoreTrainerMap, setFirestoreTrainerMap] = useState({})
+  const testAttempts = useTestAttempts(traineeId)
 
   const [detailShiftKey, setDetailShiftKey] = useState(null)
   const [ratingModal, setRatingModal] = useState({ open: false, shiftKey: null })
   const [showCompletedOpen, setShowCompletedOpen] = useState(false)
-  const [coachTip, setCoachTip] = useState('')
-  const [coachTipLoading, setCoachTipLoading] = useState(false)
   const [verbalChecklistOpen, setVerbalChecklistOpen] = useState(false)
+  const [pendingChecks, setPendingChecks] = useState([])
+  const [certPracticeData, setCertPracticeData] = useState(null)
 
-  const { getStruggleCards } = useFlashcardMastery(traineeId)
+  // Load pending post-shift knowledge checks
+  useEffect(() => {
+    if (!traineeId) return
+    getPendingChecks(traineeId).then(setPendingChecks).catch(() => setPendingChecks([]))
+  }, [traineeId])
+
+  // Load verbal cert practice data
+  useEffect(() => {
+    if (!traineeId) return
+    getVerbalCertPractice(traineeId).then(setCertPracticeData).catch(() => {})
+  }, [traineeId])
+
+  const { getStruggleCards, getMasteredCards, getStudiedCardIds, getSavedSession } = useFlashcardMastery(traineeId)
+  const [resumeFlashcard, setResumeFlashcard] = useState(null)
+  const [flashcardSets, setFlashcardSets] = useState([])
+  useEffect(() => {
+    getAllFlashcardSets().then((sets) => {
+      setFlashcardSets(sets.filter((s) => s.status !== 'hidden').sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99)))
+    }).catch(() => setFlashcardSets([]))
+  }, [])
   const struggleSetTitles = useMemo(() => {
-    return FLASHCARD_SETS.filter((s) => getStruggleCards(s.id).length > 0).map((s) => s.title)
-  }, [getStruggleCards])
+    return flashcardSets.filter((s) => getStruggleCards(s.id).length > 0).map((s) => s.title)
+  }, [flashcardSets, getStruggleCards])
+
+  useEffect(() => {
+    if (!traineeId) {
+      setResumeFlashcard(null)
+      return
+    }
+    getSavedSession().then((data) => {
+      if (data?.setId) {
+        setResumeFlashcard({ setId: data.setId, focusMode: !!data.focusMode, index: data.currentIndex ?? 0 })
+      } else {
+        setResumeFlashcard(null)
+      }
+    })
+  }, [traineeId, getSavedSession])
 
   const rawRec = (traineeId && trainingData?.[traineeId]) || null
   const rec = rawRec ? { ...rawRec, id: rawRec.id || traineeId } : null
-  const nextShift = rec ? getNextShift(rec, staffAccounts, SHIFT_ORDER) : null
-  const progress = rec ? getCertificationProgress(rec) : { done: 0, total: 6, pct: 0 }
-  const baseHealth = rec ? getTrainingHealth(rec) : { shifts: '0/6', quizAvg: 0, passRate: 0, needPractice: 0 }
-  const health = useMemo(() => {
-    const officialTests = (TESTS || []).filter((t) => t.id !== 'bonus_test')
-    const needPractice = struggleSetTitles.length
-    if (officialTests.length === 0) return { ...baseHealth, needPractice }
-    const scores = officialTests.map((t) => getBestScore(t.id)).filter((s) => s > 0)
-    const passed = officialTests.filter((t) => isTestPassed(t.id)).length
-    const quizAvg = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : baseHealth.quizAvg
-    const passRate = officialTests.length ? Math.round((passed / officialTests.length) * 100) : baseHealth.passRate
-    return { ...baseHealth, quizAvg, passRate, needPractice }
-  }, [baseHealth, getBestScore, isTestPassed, struggleSetTitles.length])
 
-  const incompleteShifts = SHIFT_ORDER.filter((key) => rec?.schedule?.[key] && !isShiftComplete(rec, key))
-  const completedShifts = REQUIRED_SHIFT_KEYS.filter((key) => rec && isShiftComplete(rec, key))
+  // Load Firestore trainers so we can resolve trainer names by Toast GUID
+  useEffect(() => {
+    const store = rawRec?.store
+    if (!store) return
+    const guid = getRestaurantGuid(store)
+    if (!guid) return
+    getTrainersByLocation(guid).then((list) => {
+      const map = {}
+      list.forEach((t) => {
+        const entry = { name: t.name, role: 'trainer' }
+        if (t.empNum) map[String(t.empNum)] = entry
+        if (t.toastGuid) map[t.toastGuid] = entry
+      })
+      setFirestoreTrainerMap(map)
+    }).catch(() => {})
+  }, [rawRec?.store, getRestaurantGuid])
+
+  // Merge Firestore trainers (keyed by Toast GUID) with staffAccounts for name lookups
+  const combinedStaffAccounts = useMemo(() => ({
+    ...firestoreTrainerMap,
+    ...staffAccounts,
+  }), [staffAccounts, firestoreTrainerMap])
+
+  const nextShift = rec ? getNextShift(rec, combinedStaffAccounts, SHIFT_ORDER) : null
+  const progress = rec ? getCertificationProgress(rec) : { done: 0, total: 6, pct: 0 }
+  const incompleteShifts = SHIFT_ORDER.filter((key) => {
+    try { return rec?.schedule?.[key] && !isShiftComplete(rec, key) } catch (_) { return false }
+  })
+  const completedShifts = REQUIRED_SHIFT_KEYS.filter((key) => {
+    try { return rec && isShiftComplete(rec, key) } catch (_) { return false }
+  })
   const shiftsRatable = SHIFT_ORDER.filter((key) => rec?.schedule?.[key]?.trainerSignedAt && rec?.schedule?.[key]?.trainer)
   const trainerRatings = rec?.trainerRatings || {}
-
-  const resumeFlashcard = useMemo(() => {
-    if (!traineeId) return null
-    try {
-      const raw = localStorage.getItem(`${FLASHCARD_SESSION_KEY}_${traineeId}`)
-      if (!raw) return null
-      const s = JSON.parse(raw)
-      if (s?.setId) return { setId: s.setId, focusMode: !!s.focusMode, index: s.index ?? 0 }
-    } catch (_) {}
-    return null
-  }, [traineeId])
 
   const resumePracticeTest = useMemo(() => {
     if (!traineeId) return null
@@ -94,16 +136,6 @@ export default function TraineeDashboard() {
     } catch (_) {}
     return null
   }, [traineeId])
-
-  const autoGenerated = useRef(false)
-  useEffect(() => {
-    if (!rec || !traineeId || autoGenerated.current) return
-    autoGenerated.current = true
-    const summary = `Certification: ${progress.done}/${progress.total} shifts. Quiz avg: ${health.quizAvg}%. Pass rate: ${health.passRate}%. Need practice: ${struggleSetTitles.length} topic(s): ${struggleSetTitles.join(', ') || 'none'}.`
-    getCoachTip(summary)
-      .then(setCoachTip)
-      .catch(() => setCoachTip(''))
-  }, [traineeId, rec, struggleSetTitles, progress.done, progress.total, health.quizAvg, health.passRate])
 
   const handleSaveRating = (shiftKey, payload) => {
     if (!traineeId || !rec) return
@@ -150,7 +182,7 @@ export default function TraineeDashboard() {
             shiftKey={detailShiftKey}
             rec={rec}
             traineeId={traineeId}
-            staffAccounts={staffAccounts}
+            staffAccounts={combinedStaffAccounts}
             onBack={() => setDetailShiftKey(null)}
           />
         </div>
@@ -176,10 +208,21 @@ export default function TraineeDashboard() {
           ) : (
             <>
           <h2 className="mb-2 text-xl font-bold text-gray-800">Trainee Dashboard</h2>
-          <p className="mb-6 text-sm text-gray-600">{rec?.store || currentUser?.store || 'Westfield'} · #{rec?.employeeNumber || currentUser?.empNum || '—'}</p>
+          <p className="mb-2 text-sm text-gray-600">{getStoreDisplayName(rec?.store || currentUser?.store || 'Westfield')} · #{rec?.employeeNumber || currentUser?.empNum || '—'}</p>
+          {trainingDataFetchedAt && (() => {
+            const ageMs = Date.now() - new Date(trainingDataFetchedAt).getTime()
+            if (ageMs < 60 * 60 * 1000) return null
+            const hours = Math.floor(ageMs / (60 * 60 * 1000))
+            return (
+              <div className="mb-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                <span>&#9888;</span>
+                <span>Your progress data is {hours} hour{hours !== 1 ? 's' : ''} old — may not be current.</span>
+              </div>
+            )
+          })()}
 
-          {/* What's Next - sticky so it stays visible when scrolling */}
-          <section className="sticky top-0 z-10 mb-6 rounded-xl border-2 border-[var(--color-primary)] bg-green-50/50 p-4 shadow-sm backdrop-blur-sm">
+          {/* What's Next */}
+          <section className="mb-6 rounded-xl border-2 border-[var(--color-primary)] bg-green-50/50 p-4 shadow-sm">
             <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-[var(--color-primary)]">What&apos;s next</h3>
             {nextShift ? (
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -189,7 +232,7 @@ export default function TraineeDashboard() {
                     {nextShift.label}
                   </div>
                   <div className="mt-1 text-sm text-gray-600">{nextWhenStr}</div>
-                  <div className="mt-0.5 text-sm text-gray-500">Trainer: {nextShift.trainerName}</div>
+                  {nextShift.key !== 'foodrun' && <div className="mt-0.5 text-sm text-gray-500">Trainer: {nextShift.trainerName}</div>}
                   <div className="mt-2 flex flex-wrap gap-2">
                     <button
                       type="button"
@@ -207,23 +250,10 @@ export default function TraineeDashboard() {
                         Flashcards
                       </button>
                     )}
-                    {shiftsRatable.includes(nextShift.key) && (
-                      <button
-                        type="button"
-                        className="btn btn-small text-sm bg-[#e65100] border-[#e65100] text-white hover:bg-[#f57c00] hover:border-[#f57c00]"
-                        onClick={() => setRatingModal({ open: true, shiftKey: nextShift.key })}
-                      >
-                        Rate your trainer
-                      </button>
-                    )}
                     <button
                       type="button"
                       className="btn btn-small text-sm"
-                      onClick={() => {
-                        const testIds = getShiftRequiredTestIds(nextShift.key, traineeId)
-                        const first = testIds[0]
-                        navigate(first ? `/quizzes?test=${encodeURIComponent(first)}&mode=practice` : '/quizzes')
-                      }}
+                      onClick={() => navigate(`/quizzes?shift=${encodeURIComponent(nextShift.key)}&mode=practice`)}
                     >
                       Practice Test
                     </button>
@@ -240,48 +270,89 @@ export default function TraineeDashboard() {
                     </button>
                   </div>
                 </div>
-                <span className="rounded-full bg-[#e65100] px-3 py-1 text-xs font-bold text-white">
-                  {nextShift.complete ? 'Complete' : 'In progress'}
-                </span>
+                {(() => {
+                  if (nextShift.complete) return <span className="rounded-full bg-[#2e7d32] px-3 py-1 text-xs font-bold text-white">Complete</span>
+                  const isFuture = (() => {
+                    if (!nextShift.when) return false
+                    try {
+                      const shiftDate = new Date(nextShift.when)
+                      const today = new Date()
+                      today.setHours(0, 0, 0, 0)
+                      shiftDate.setHours(0, 0, 0, 0)
+                      return shiftDate.getTime() > today.getTime()
+                    } catch (_) { return false }
+                  })()
+                  if (isFuture) return <span className="rounded-full bg-[#1976d2] px-3 py-1 text-xs font-bold text-white">Upcoming</span>
+                  return <span className="rounded-full bg-[#e65100] px-3 py-1 text-xs font-bold text-white">In progress</span>
+                })()}
               </div>
             ) : (
               <p className="text-gray-600">No upcoming shifts. All required shifts are complete or not yet scheduled.</p>
             )}
           </section>
 
-          {/* Coach's Corner */}
-          <section className="mb-6 rounded-xl border border-blue-200 bg-blue-50/50 p-4">
-            <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-blue-800">Coach&apos;s corner</h3>
-            <p className="mb-3 rounded-lg border-l-4 border-[var(--color-primary)] bg-white/80 px-3 py-2 text-sm text-gray-700">
-              {struggleSetTitles.length > 0
-                ? <>You have <strong>{struggleSetTitles.length}</strong> topic{struggleSetTitles.length !== 1 ? 's' : ''} with cards marked Need Practice. They show up first in Flashcards and in Focus mode.</>
-                : 'No cards marked Need Practice yet. When you tap "Need Practice" or "Got it" on a flashcard, your choice is saved and used for quizzes and your study plan.'}
-            </p>
-            {coachTip ? (
-              <div className="text-gray-800 whitespace-pre-wrap">{coachTip}</div>
-            ) : (
-              <p className="text-gray-600 text-sm">Get a personalized tip based on your progress.</p>
-            )}
-            <button
-              type="button"
-              className="btn btn-small mt-2"
-              disabled={coachTipLoading}
-              onClick={async () => {
-                setCoachTipLoading(true)
-                try {
-                  const summary = `Certification: ${progress.done}/${progress.total} shifts. Quiz avg: ${health.quizAvg}%. Pass rate: ${health.passRate}%. Need practice: ${struggleSetTitles.length} topic(s): ${struggleSetTitles.join(', ') || 'none'}.`
-                  const text = await getCoachTip(summary)
-                  setCoachTip(text)
-                } catch (_) {
-                  setCoachTip('Could not load tip. Try again.')
-                } finally {
-                  setCoachTipLoading(false)
-                }
-              }}
-            >
-              {coachTipLoading ? 'Loading…' : coachTip ? 'Refresh tip' : 'Get coach tip'}
-            </button>
-          </section>
+          {/* Post-shift knowledge check banners */}
+          {pendingChecks.length > 0 && (
+            <section className="mb-6 space-y-2">
+              {pendingChecks.map((check) => {
+                const meta = SHIFT_META[check.shiftKey] || { label: check.shiftKey, icon: '' }
+                const flashcardSetId = meta.flashcardSetId
+                return (
+                  <div
+                    key={check.id}
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-xl border-2 border-amber-400 bg-amber-50 p-4 shadow-sm"
+                  >
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-lg">&#128218;</span>
+                        <span className="font-bold text-amber-900">Knowledge check available</span>
+                      </div>
+                      <p className="mt-1 text-sm text-amber-800">
+                        Review what you learned on your {meta.label} shift
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-small bg-amber-500 border-amber-500 text-white hover:bg-amber-600 hover:border-amber-600"
+                      onClick={() => {
+                        const testId = flashcardSetId
+                          ? Object.entries({ bar_test: 'bar-beer', wines_test: 'wines-cocktails', soups_test: 'starters-soups-salads', steaks_test: 'steaks-specialties' }).find(([, v]) => v === flashcardSetId)?.[0] || 'verbal_cert'
+                          : 'verbal_cert'
+                        navigate(`/quizzes?test=${encodeURIComponent(testId)}&mode=practice&postShiftCheck=${encodeURIComponent(check.id)}`)
+                      }}
+                    >
+                      Start review
+                    </button>
+                  </div>
+                )
+              })}
+            </section>
+          )}
+
+          {/* Health summary — compact, links to full report */}
+          {traineeId && (
+            <HealthSummaryCard
+              traineeId={traineeId}
+              traineeName={rec?.name}
+              userId={traineeId}
+              trainingData={trainingData}
+            />
+          )}
+
+          {/* Test readiness — per-test mastery breakdown */}
+          {traineeId && (
+            <TestReadinessPanel
+              getStruggleCards={getStruggleCards}
+              getMasteredCards={getMasteredCards}
+              getStudiedCardIds={getStudiedCardIds}
+              getAttempts={testAttempts.getAttempts}
+              getRequiredScore={testAttempts.getRequiredScore}
+              getBestScore={testAttempts.getBestScore}
+            />
+          )}
+
+          {/* Weakness practice panel — quiz weak topics and weak spots */}
+          {traineeId && <WeaknessPracticePanel userId={traineeId} />}
 
           {/* Resume last activity - only when there is a resumable session */}
           {(resumeFlashcard || resumePracticeTest) && (
@@ -337,6 +408,23 @@ export default function TraineeDashboard() {
             <div className="mt-3">
               <CertificationProgress done={progress.done} total={progress.total} />
             </div>
+            {certPracticeData && (
+              <div className={`mt-3 flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium ${certPracticeData.readyForCert ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}>
+                <span>{certPracticeData.readyForCert ? '✓' : '○'}</span>
+                <span>
+                  {certPracticeData.readyForCert
+                    ? `Verbal cert ready (${certPracticeData.bestTotal != null ? certPracticeData.bestTotal + '%' : 'complete'})`
+                    : `Verbal cert practice: ${certPracticeData.bestTotal != null ? certPracticeData.bestTotal + '%' : '—'} — keep studying`}
+                </span>
+                <button
+                  type="button"
+                  className="ml-auto text-xs underline"
+                  onClick={() => navigate('/verbal-cert-practice')}
+                >
+                  {certPracticeData.readyForCert ? 'Practice again' : 'Practice now'}
+                </button>
+              </div>
+            )}
           </section>
 
           {/* Study: Flashcards, Practice Tests, Tests */}
@@ -352,18 +440,10 @@ export default function TraineeDashboard() {
               <button type="button" className="btn" onClick={() => navigate('/quizzes#tests')}>
                 Tests
               </button>
+              <button type="button" className="btn" onClick={() => navigate('/checklists')}>
+                Shift Checklists
+              </button>
             </div>
-          </section>
-
-          {/* Training health */}
-          <section className="mb-6">
-            <h3 className="mb-2 border-l-4 border-l-[var(--color-primary)] pl-3 text-sm font-bold uppercase tracking-wide text-gray-500">Training health</h3>
-            <TrainingHealth
-              shifts={health.shifts}
-              quizAvg={health.quizAvg}
-              passRate={health.passRate}
-              needPractice={health.needPractice}
-            />
           </section>
 
           {/* Schedule list (incomplete) */}
@@ -378,7 +458,9 @@ export default function TraineeDashboard() {
                     key={key}
                     shiftKey={key}
                     rec={rec}
-                    staffAccounts={staffAccounts}
+                    staffAccounts={combinedStaffAccounts}
+                    traineeId={traineeId}
+                    testAttempts={testAttempts}
                     onViewDetail={setDetailShiftKey}
                     onStudyFlashcards={(setId) => setId && navigate(`/flashcards?set=${encodeURIComponent(setId)}`)}
                     onPracticeTest={(shiftKey) => {
@@ -410,7 +492,7 @@ export default function TraineeDashboard() {
                   const item = rec.schedule?.[key] || {}
                   const whenStr = item.when ? formatWhenHuman(item.when) : '—'
                   const trainerName = item.trainer
-                    ? (staffAccounts[item.trainer]?.name || `#${item.trainer}`)
+                    ? (combinedStaffAccounts[item.trainer]?.name || `#${item.trainer}`)
                     : '—'
                   const rated = !!trainerRatings[key]
                   return (
@@ -461,7 +543,7 @@ export default function TraineeDashboard() {
                     const item = rec.schedule?.[key] || {}
                     const whenStr = item.when ? formatWhenHuman(item.when) : '—'
                     const trainerName = item.trainer
-                      ? (staffAccounts[item.trainer]?.name || `#${item.trainer}`)
+                      ? (combinedStaffAccounts[item.trainer]?.name || `#${item.trainer}`)
                       : '—'
                     const rated = !!trainerRatings[key]
                     return (
@@ -471,20 +553,22 @@ export default function TraineeDashboard() {
                       >
                         <div>
                           <span className="font-medium text-gray-800">{meta.icon ? `${meta.icon} ` : ''}{meta.label}</span>
-                          <div className="text-sm text-gray-500">{whenStr} · {trainerName}</div>
+                          <div className="text-sm text-gray-500">{key === 'foodrun' ? whenStr : `${whenStr} · ${trainerName}`}</div>
                         </div>
-                        <button
-                          type="button"
-                          className="btn btn-small"
-                          onClick={() =>
-                            setRatingModal({
-                              open: true,
-                              shiftKey: key,
-                            })
-                          }
-                        >
-                          {rated ? 'Update rating' : 'Rate your trainer'}
-                        </button>
+                        {key !== 'foodrun' && (
+                          <button
+                            type="button"
+                            className="btn btn-small"
+                            onClick={() =>
+                              setRatingModal({
+                                open: true,
+                                shiftKey: key,
+                              })
+                            }
+                          >
+                            {rated ? 'Update rating' : 'Rate your trainer'}
+                          </button>
+                        )}
                       </div>
                     )
                   })
@@ -509,7 +593,7 @@ export default function TraineeDashboard() {
           trainerId={rec.schedule?.[ratingModal.shiftKey]?.trainer}
           trainerName={
             rec.schedule?.[ratingModal.shiftKey]?.trainer
-              ? (staffAccounts[rec.schedule[ratingModal.shiftKey].trainer]?.name ||
+              ? (combinedStaffAccounts[rec.schedule[ratingModal.shiftKey].trainer]?.name ||
                 `#${rec.schedule[ratingModal.shiftKey].trainer}`)
               : ''
           }

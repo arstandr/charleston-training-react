@@ -1,6 +1,7 @@
 import { REQUIRED_SHIFT_KEYS, SHIFT_META } from '../constants'
 import { SHIFT_TEST_RULES, TESTS, PRETTY_TEST_NAMES } from '../data/quizDatabase'
 import { analyzeTraineeRisk } from './RiskEngine'
+import { getRequiredItemIds } from '../data/shiftChecklistTemplates'
 
 export function getInitials(name) {
   if (!name || typeof name !== 'string') return '?'
@@ -278,11 +279,19 @@ export function formatWhenHuman(iso) {
 // --- Trainer dashboard helpers ---
 
 /** Whether all required tests for a shift are passed (for trainer sign-off eligibility) */
-export function shiftRequiredTestsPassed(rec, shiftKey, traineeId) {
+export function shiftRequiredTestsPassed(rec, shiftKey, traineeId, externalAttempts = null) {
   const ids = getShiftRequiredTestIds(shiftKey, traineeId)
   if (ids.length === 0) return true
   const id = traineeId || rec?.id
-  return ids.every((tid) => isTestPassed(rec, tid) || isTestPassedFromStorage(id, tid))
+  return ids.every((tid) => {
+    if (isTestPassed(rec, tid) || isTestPassedFromStorage(id, tid)) return true
+    if (externalAttempts) {
+      const r = externalAttempts[`${id}_${tid}`] || {}
+      const best = r.scores?.length ? Math.max(...r.scores) : 0
+      if (!!r.passed || best >= PASSING_SCORE) return true
+    }
+    return false
+  })
 }
 
 /** Checklist complete for shift (if we store checklist completion) */
@@ -299,6 +308,37 @@ export function isChecklistComplete(rec, shiftKey) {
   return true
 }
 
+/** Whether all REQUIRED (bold/discuss:true) checklist items are checked — used for sign-off gate. */
+export function isRequiredChecklistComplete(rec, shiftKey) {
+  const requiredIds = getRequiredItemIds(shiftKey)
+  if (requiredIds.length === 0) return true
+  const items = rec?.checklists?.[shiftKey]?.items || {}
+  return requiredIds.every((id) => {
+    const entry = items[id]
+    return entry?.value === true || entry?.checked === true
+  })
+}
+
+/** Returns { checked, total } for checklist progress */
+export function getChecklistProgress(rec, shiftKey) {
+  const checklists = rec?.checklists || {}
+  const c = checklists[shiftKey]
+  if (!c) return { checked: 0, total: 0 }
+  const items = c.items
+  if (typeof items === 'object' && items !== null && !Array.isArray(items)) {
+    const vals = Object.values(items)
+    const total = vals.length
+    const checked = vals.filter((i) => i?.value === true || i?.checked === true).length
+    return { checked, total }
+  }
+  if (Array.isArray(items)) {
+    const total = items.length
+    const checked = items.filter((i) => i?.checked || i?.value).length
+    return { checked, total }
+  }
+  return { checked: 0, total: 0 }
+}
+
 /** True if when (ISO or date string) is on the same calendar day as refDate (default today). */
 export function isSameCalendarDay(when, refDate = new Date()) {
   if (!when) return false
@@ -309,7 +349,7 @@ export function isSameCalendarDay(when, refDate = new Date()) {
 }
 
 /** Assigned shifts for this trainer: { traineeId, traineeName, shiftKey, shiftLabel, when, trainerSigned, managerSigned, testsStatus, checklistComplete, failedTestTitles }[] */
-export function getTrainerAssignedShifts(trainingData, trainerEmpNum, store) {
+export function getTrainerAssignedShifts(trainingData, trainerEmpNum, store, testAttempts = null) {
   const out = []
   const emp = String(trainerEmpNum || '')
   const st = store || ''
@@ -320,11 +360,20 @@ export function getTrainerAssignedShifts(trainingData, trainerEmpNum, store) {
     for (const [shiftKey, item] of Object.entries(schedule)) {
       if (!item || item.trainer !== emp) continue
       const meta = (SHIFT_META && SHIFT_META[shiftKey]) || { label: shiftKey, icon: '' }
-      const testsOk = shiftRequiredTestsPassed(rec, shiftKey, traineeId)
-      const checklistComplete = isChecklistComplete(rec, shiftKey)
+      const testsOk = shiftRequiredTestsPassed(rec, shiftKey, traineeId, testAttempts)
+      const checklistComplete = isRequiredChecklistComplete(rec, shiftKey)
+      const checklistProgress = getChecklistProgress(rec, shiftKey)
       const requiredIds = getShiftRequiredTestIds(shiftKey, traineeId)
       const failedTestTitles = requiredIds
-        .filter((tid) => !isTestPassed(rec, tid) && !isTestPassedFromStorage(traineeId, tid))
+        .filter((tid) => {
+          if (isTestPassed(rec, tid) || isTestPassedFromStorage(traineeId, tid)) return false
+          if (testAttempts) {
+            const r = testAttempts[`${traineeId}_${tid}`] || {}
+            const best = r.scores?.length ? Math.max(...r.scores) : 0
+            if (!!r.passed || best >= PASSING_SCORE) return false
+          }
+          return true
+        })
         .map((tid) => (PRETTY_TEST_NAMES && PRETTY_TEST_NAMES[tid]) || tid)
       out.push({
         traineeId,
@@ -337,6 +386,7 @@ export function getTrainerAssignedShifts(trainingData, trainerEmpNum, store) {
         managerSigned: !!item.managerSignedAt,
         testsStatus: testsOk ? 'passed' : 'pending',
         checklistComplete,
+        checklistProgress,
         failedTestTitles,
       })
     }
@@ -443,8 +493,8 @@ export function approveShiftClaim(trainingData, traineeId, shiftKey) {
   const item = next[traineeId]?.schedule?.[shiftKey]
   if (!item?.pendingTrainer) return trainingData
   item.trainer = item.pendingTrainer
-  delete item.pendingTrainer
-  delete item.pendingAt
+  item.pendingTrainer = null
+  item.pendingAt = null
   return next
 }
 
@@ -453,8 +503,8 @@ export function denyShiftClaim(trainingData, traineeId, shiftKey) {
   const next = JSON.parse(JSON.stringify(trainingData || {}))
   const item = next[traineeId]?.schedule?.[shiftKey]
   if (!item?.pendingTrainer) return trainingData
-  delete item.pendingTrainer
-  delete item.pendingAt
+  item.pendingTrainer = null
+  item.pendingAt = null
   return next
 }
 
@@ -489,12 +539,12 @@ export function getTrainerEffectiveness(trainingData, trainerEmpNum, store, test
 }
 
 /** Recent test attempts for trainees assigned to this trainer. Returns { traineeId, traineeName, testId, testName, score, passed }[] (max limit). */
-export function getRecentTestAttemptsForTrainer(trainingData, trainerEmpNum, store, limit = 20) {
+export function getRecentTestAttemptsForTrainer(trainingData, trainerEmpNum, store, limit = 20, testAttempts) {
   const assigned = getTrainerAssignedShifts(trainingData, trainerEmpNum, store)
   const traineeIds = new Set(assigned.map((r) => r.traineeId))
   const nameByTrainee = {}
   assigned.forEach((r) => { nameByTrainee[r.traineeId] = r.traineeName })
-  const attempts = loadTestAttemptsFromStorage()
+  const attempts = testAttempts || loadTestAttemptsFromStorage()
   const list = []
   for (const key of Object.keys(attempts)) {
     const idx = key.indexOf('_')
@@ -604,9 +654,16 @@ export function getManagerNeedsYouQueue(trainingData, store) {
 
 /** Rows for manager schedule grid: one per (trainee, shift). staffAccounts optional for trainer names. */
 export function getManagerScheduleRows(trainingData, store, staffAccounts = {}) {
+  // Build a toastGuid → name map for fallback lookups (trainer field may be a Toast GUID)
+  const byToastGuid = {}
+  Object.values(staffAccounts).forEach((acc) => {
+    if (acc.toastGuid && acc.name) byToastGuid[acc.toastGuid] = acc.name
+  })
   const getName = (emp) => {
     const r = staffAccounts[emp]
-    return (r && r.name) ? r.name : (emp ? `#${emp}` : '—')
+    if (r && r.name) return r.name
+    if (byToastGuid[emp]) return byToastGuid[emp]
+    return emp ? `#${emp}` : '—'
   }
   const out = []
   const st = store || ''
@@ -696,7 +753,7 @@ export function updateChecklistItem(trainingData, traineeId, shiftKey, itemId, v
 export function updateShiftFeedback(trainingData, traineeId, shiftKey, feedback) {
   const next = JSON.parse(JSON.stringify(trainingData || {}))
   const rec = next[traineeId]
-  if (!rec?.schedule?.[shiftKey]) return trainingData
+  if (!rec) return trainingData
   rec.shiftFeedback = rec.shiftFeedback || {}
   rec.shiftFeedback[shiftKey] = { ...(rec.shiftFeedback[shiftKey] || {}), ...feedback }
   return next

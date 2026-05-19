@@ -1,88 +1,178 @@
-import { useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useAuth } from '../contexts/AuthContext'
+import * as flashcardIntelligence from '../services/flashcardIntelligenceService'
 
-const FLASHCARD_MASTERY_KEY = 'flashcard_mastery'
+/**
+ * Flashcard mastery and progress - 100% Firestore via flashcardIntelligenceService.
+ * Uses currentUser.uid (staff) or currentUser.id/traineeId (trainees with session tokens).
+ * getMastery / getStruggleCards / getMasteredCards are sync (from in-memory cache).
+ * recordResult, buildDeck, getStatistics are async.
+ */
+export function useFlashcardMastery(traineeIdParam) {
+  const { currentUser } = useAuth()
+  const userId = currentUser?.uid ?? currentUser?.id ?? currentUser?.traineeId
+  const traineeId = traineeIdParam ?? currentUser?.traineeId ?? currentUser?.id ?? userId
 
-function loadStore() {
-  try {
-    const raw = localStorage.getItem(FLASHCARD_MASTERY_KEY) || '{}'
-    return JSON.parse(raw) || {}
-  } catch (_) {
-    return {}
-  }
-}
+  const [masteryRecords, setMasteryRecords] = useState([])
+  const [progressRecords, setProgressRecords] = useState([])
+  const [statistics, setStatistics] = useState(null)
+  const [loading, setLoading] = useState(true)
 
-function saveStore(store) {
-  try {
-    localStorage.setItem(FLASHCARD_MASTERY_KEY, JSON.stringify(store))
-  } catch (_) {}
-}
+  const loadCache = useCallback(async () => {
+    if (!userId) {
+      setMasteryRecords([])
+      setProgressRecords([])
+      setStatistics(null)
+      setLoading(false)
+      return
+    }
+    setLoading(true)
+    try {
+      const [mastery, progress, stats] = await Promise.all([
+        flashcardIntelligence.getAllMasteryForUser(userId),
+        flashcardIntelligence.getAllProgressForUser(userId),
+        flashcardIntelligence.getFlashcardStatistics(userId),
+      ])
+      setMasteryRecords(mastery || [])
+      setProgressRecords(progress || [])
+      setStatistics(stats || null)
+    } catch (e) {
+      console.error('useFlashcardMastery loadCache:', e)
+      setMasteryRecords([])
+      setProgressRecords([])
+      setStatistics(null)
+    } finally {
+      setLoading(false)
+    }
+  }, [userId])
 
-export function useFlashcardMastery(traineeId) {
+  useEffect(() => {
+    loadCache()
+  }, [loadCache])
+
+  const masteryByKey = useMemo(() => {
+    const map = {}
+    masteryRecords.forEach((r) => {
+      const key = `${userId}_${r.cardId}`
+      map[key] = r
+    })
+    return map
+  }, [userId, masteryRecords])
+
   const getMastery = useCallback(
     (cardId) => {
-      if (!traineeId) return { status: null, struggleCount: 0, masteryCount: 0 }
-      const store = loadStore()
-      const key = `${traineeId}_${cardId}`
-      const rec = store[key] || {}
+      if (!userId || !cardId) return { status: null, struggleCount: 0, masteryCount: 0, lastSeen: 0 }
+      const key = `${userId}_${cardId}`
+      const r = masteryByKey[key] || {}
       return {
-        status: rec.status || null,
-        struggleCount: rec.struggleCount || 0,
-        masteryCount: rec.masteryCount || 0,
-        lastSeen: rec.lastSeen,
+        status: r.status || null,
+        struggleCount: r.struggleCount || 0,
+        masteryCount: r.masteryCount || 0,
+        lastSeen: r.lastSeen,
       }
     },
-    [traineeId]
+    [userId, masteryByKey]
   )
 
   const recordResult = useCallback(
-    (cardId, result) => {
-      if (!traineeId) return
-      const store = loadStore()
-      const key = `${traineeId}_${cardId}`
-      const rec = store[key] || { struggleCount: 0, masteryCount: 0 }
-      const now = Date.now()
-      if (result === 'needsPractice' || result === 'struggle') {
-        rec.struggleCount = (rec.struggleCount || 0) + 1
-        rec.status = 'struggle'
-      } else if (result === 'gotIt' || result === 'mastered') {
-        rec.masteryCount = (rec.masteryCount || 0) + 1
-        if (rec.masteryCount > 2) rec.status = 'mastered'
-      }
-      rec.lastSeen = now
-      store[key] = rec
-      saveStore(store)
+    async (cardId, result, currentSession = null) => {
+      if (!userId || !cardId) return
+      await flashcardIntelligence.recordFlashcardFeedback(userId, cardId, result, currentSession)
+      await flashcardIntelligence.recordFlashcardMastery(userId, cardId, result)
+      await loadCache()
     },
-    [traineeId]
+    [userId, loadCache]
   )
 
   const getStruggleCards = useCallback(
     (setId) => {
-      if (!traineeId) return []
-      const store = loadStore()
-      return Object.keys(store).filter((k) => {
-        if (!k.startsWith(traineeId + '_')) return false
-        const cardId = k.slice(traineeId.length + 1)
-        return setId ? cardId.startsWith(setId + '_') || cardId === setId : true
-      }).filter((k) => store[k].status === 'struggle').map((k) => k.slice(traineeId.length + 1))
+      if (!userId) return []
+      return masteryRecords.filter((r) => r.status === 'struggle').map((r) => r.cardId)
     },
-    [traineeId]
+    [userId, masteryRecords]
   )
 
   const getMasteredCards = useCallback(
     (setId) => {
-      if (!traineeId) return []
-      const store = loadStore()
-      return Object.keys(store).filter((k) => {
-        if (!k.startsWith(traineeId + '_')) return false
-        const cardId = k.slice(traineeId.length + 1)
-        return setId ? cardId.startsWith(setId + '_') || cardId === setId : true
-      }).filter((k) => store[k].status === 'mastered').map((k) => k.slice(traineeId.length + 1))
+      if (!userId) return []
+      return masteryRecords.filter((r) => r.status === 'mastered').map((r) => r.cardId)
     },
-    [traineeId]
+    [userId, masteryRecords]
   )
 
+  // All card IDs with any mastery record (seen at least once, regardless of status)
+  const getStudiedCardIds = useCallback(
+    () => {
+      if (!userId) return []
+      return masteryRecords.map((r) => r.cardId)
+    },
+    [userId, masteryRecords]
+  )
+
+  const buildDeck = useCallback(
+    async (setId, cards, focusMode, quarantinedCardIds, useLeitner = true) => {
+      if (!userId) {
+        const raw = (cards || []).map((card) => ({
+          card,
+          cardId: flashcardIntelligence.stableCardId(setId, card),
+        }))
+        const deck = flashcardIntelligence.filterQuarantinedCards(raw, quarantinedCardIds || new Set())
+        return useLeitner ? { deck, sessionNumber: 1, allCaughtUp: false } : deck
+      }
+      const result = await flashcardIntelligence.buildStudyDeck(
+        setId,
+        cards || [],
+        userId,
+        !!focusMode,
+        quarantinedCardIds || new Set(),
+        useLeitner
+      )
+      return result
+    },
+    [userId]
+  )
+
+  const getStatistics = useCallback(async () => {
+    if (!userId) return null
+    const stats = await flashcardIntelligence.getFlashcardStatistics(userId)
+    setStatistics(stats)
+    return stats
+  }, [userId])
+
+  const getSavedSession = useCallback(() => {
+    return userId ? flashcardIntelligence.getSavedSession(userId) : Promise.resolve(null)
+  }, [userId])
+
   return useMemo(
-    () => ({ getMastery, recordResult, getStruggleCards, getMasteredCards }),
-    [getMastery, recordResult, getStruggleCards, getMasteredCards]
+    () => ({
+      getMastery,
+      recordResult,
+      getStruggleCards,
+      getMasteredCards,
+      getStudiedCardIds,
+      buildDeck,
+      getStatistics,
+      getSavedSession,
+      statistics,
+      loading,
+      traineeId,
+      userId,
+      reload: loadCache,
+    }),
+    [
+      getMastery,
+      recordResult,
+      getStruggleCards,
+      getMasteredCards,
+      getStudiedCardIds,
+      buildDeck,
+      getStatistics,
+      getSavedSession,
+      statistics,
+      loading,
+      traineeId,
+      userId,
+      loadCache,
+    ]
   )
 }

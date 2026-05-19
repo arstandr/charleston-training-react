@@ -1,20 +1,30 @@
-import { FLASHCARD_DATABASE } from '../data/flashcardDatabase'
+import { useState, useEffect } from 'react'
+import { getFlashcardsBySetAndStatus } from '../services/flashcardService'
 
-const VERBAL_CERT_CARDS = FLASHCARD_DATABASE.verbal_cert || []
 const PHASE_LABELS = [
   'Phase 1: Training & local options',
   'Phase 2: Food menu (soups, salads, sides, entrees)',
   'Phase 3: Bar (beer, spirits, wine, cocktails)',
   'Phase 4: Service standards & procedures',
 ]
-const PHASE_SPLITS = [0, 17, 36, 53, VERBAL_CERT_CARDS.length] // rough split by topic
+const PHASE_SPLITS = [0, 17, 36, 53] // indices into verbal_cert list; last phase is 53 to end
 
 export default function VerbalCertChecklistModal({ open, onClose }) {
+  const [cards, setCards] = useState([])
+
+  useEffect(() => {
+    if (!open) return
+    getFlashcardsBySetAndStatus('verbal_cert', 'active')
+      .then((list) => setCards(list))
+      .catch(() => setCards([]))
+  }, [open])
+
   if (!open) return null
 
+  const splits = [...PHASE_SPLITS, cards.length]
   const phases = PHASE_LABELS.map((label, i) => ({
     label,
-    items: VERBAL_CERT_CARDS.slice(PHASE_SPLITS[i], PHASE_SPLITS[i + 1]).map((c) => c.front),
+    items: cards.slice(splits[i], splits[i + 1]).map((c) => c.front || c.name || ''),
   }))
 
   return (

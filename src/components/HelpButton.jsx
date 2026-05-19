@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { doc, getDoc } from 'firebase/firestore'
-import { db } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
+import { getFromFirestore } from '../utils/firestore'
 import { useTestActive } from '../contexts/TestActiveContext'
 import { useLocation } from 'react-router-dom'
 import { DEFAULT_HELP_CONTENT } from '../data/defaultHelpContent'
@@ -24,10 +23,9 @@ export default function HelpButton() {
   useEffect(() => {
     if (!open || !currentUser) return
     setLoadingContent(true)
-    getDoc(doc(db, 'config', HELP_DOC_ID))
-      .then((snap) => {
-        if (snap.exists()) {
-          const data = snap.data()
+    getFromFirestore('config', HELP_DOC_ID)
+      .then((data) => {
+        if (data) {
           const content = (data.content ?? data.text ?? '').trim()
           setKnowledgeBase(content || DEFAULT_HELP_CONTENT)
         } else {

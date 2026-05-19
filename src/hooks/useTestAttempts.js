@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getTestAttemptResets } from '../services/testAttemptResets'
+import { saveTestResult, loadTestResults } from '../services/quizAttemptsService'
 
 const TEST_ATTEMPTS_KEY = 'testAttempts'
 const RESETS_APPLIED_KEY = 'testAttemptResetsApplied'
-const PASSING_SCORE_ATTEMPT_1 = 85
-const PASSING_SCORE_ATTEMPT_2 = 90
+const PASSING_SCORE_ATTEMPT_1 = 80
+const PASSING_SCORE_ATTEMPT_2 = 85
+const PASSING_SCORE_ATTEMPT_3 = 90
+const DEFAULT_MAX_ATTEMPTS = 2
 
 function loadAttempts() {
   try {
@@ -37,7 +40,66 @@ function saveResetsApplied(obj) {
 }
 
 export function useTestAttempts(traineeId) {
-  // Apply manager-initiated resets from Firestore (clears local attempts when reset is newer than last applied)
+  const hydratedRef = useRef(false)
+  // hydrating = true until Firestore attempt data has been checked this session.
+  // Starts true even when traineeId is absent so callers don't flash an open gate
+  // before the traineeId is known. Set to false once we have a definitive answer.
+  const [hydrating, setHydrating] = useState(true)
+
+  // Hydrate localStorage from Firestore on mount so lockout works cross-browser
+  useEffect(() => {
+    if (!traineeId) {
+      setHydrating(false)
+      return
+    }
+    if (hydratedRef.current) return
+    hydratedRef.current = true
+    // Re-arm the gate in case the !traineeId path already cleared it
+    // (auth is async: traineeId starts null, then resolves)
+    setHydrating(true)
+    let cancelled = false
+    loadTestResults(traineeId).then((firestoreData) => {
+      if (cancelled) return
+      if (firestoreData) {
+        const localAttempts = loadAttempts()
+        let changed = false
+        for (const [testId, fsRec] of Object.entries(firestoreData)) {
+          const key = `${traineeId}_${testId}`
+          const local = localAttempts[key] || { count: 0, scores: [], passed: false, usedBonusIds: [], maxAttempts: DEFAULT_MAX_ATTEMPTS }
+          const fsCount = fsRec?.count || 0
+          const fsScores = Array.isArray(fsRec?.scores) ? fsRec.scores : []
+          const fsPassed = !!fsRec?.passed
+          const fsMax = fsRec?.maxAttempts || DEFAULT_MAX_ATTEMPTS
+          // Merge usedBonusIds from both sources (union)
+          const mergedBonusIds = [...new Set([...(local.usedBonusIds || []), ...(Array.isArray(fsRec?.usedBonusIds) ? fsRec.usedBonusIds : [])])]
+          // Firestore is authoritative — use whichever has more attempts, and highest maxAttempts
+          if (fsCount > (local.count || 0) || fsMax > (local.maxAttempts || DEFAULT_MAX_ATTEMPTS)) {
+            localAttempts[key] = {
+              count: Math.max(fsCount, local.count || 0),
+              scores: fsCount > (local.count || 0) ? fsScores : local.scores,
+              passed: fsPassed || local.passed,
+              usedBonusIds: mergedBonusIds,
+              maxAttempts: Math.max(fsMax, local.maxAttempts || DEFAULT_MAX_ATTEMPTS),
+            }
+            changed = true
+          } else if (fsPassed && !local.passed || mergedBonusIds.length > (local.usedBonusIds || []).length) {
+            localAttempts[key] = { ...local, passed: fsPassed || local.passed, usedBonusIds: mergedBonusIds }
+            changed = true
+          }
+        }
+        if (changed) {
+          saveAttempts(localAttempts)
+        }
+      }
+      setHydrating(false)
+    }).catch((e) => {
+      console.warn('[useTestAttempts] Firestore hydration failed:', e?.message)
+      setHydrating(false)
+    })
+    return () => { cancelled = true }
+  }, [traineeId])
+
+  // Apply manager-initiated resets from Firestore (bumps maxAttempts to give 1 retake)
   useEffect(() => {
     if (!traineeId) return
     let cancelled = false
@@ -49,7 +111,13 @@ export function useTestAttempts(traineeId) {
       for (const [testId, { at }] of Object.entries(resets)) {
         const key = `${traineeId}_${testId}`
         if (at > (applied[key] || 0)) {
-          delete attempts[key]
+          const existing = attempts[key]
+          if (existing && (existing.count || 0) >= (existing.maxAttempts || DEFAULT_MAX_ATTEMPTS)) {
+            // Bump maxAttempts by 1 — gives exactly 1 retake, count stays accurate
+            attempts[key] = { ...existing, maxAttempts: (existing.count || 0) + 1, passed: false }
+          } else if (!existing) {
+            // No record — nothing to reset
+          }
           applied[key] = at
           changed = true
         }
@@ -64,38 +132,51 @@ export function useTestAttempts(traineeId) {
 
   const getAttempts = useCallback(
     (testId) => {
-      if (!traineeId) return { count: 0, scores: [], passed: false }
+      if (!traineeId) return { count: 0, scores: [], passed: false, usedBonusIds: [], maxAttempts: DEFAULT_MAX_ATTEMPTS }
       const attempts = loadAttempts()
       const key = `${traineeId}_${testId}`
-      const rec = attempts[key] || { count: 0, scores: [], passed: false }
+      const rec = attempts[key] || { count: 0, scores: [], passed: false, usedBonusIds: [], maxAttempts: DEFAULT_MAX_ATTEMPTS }
       return {
         count: rec.count || 0,
         scores: Array.isArray(rec.scores) ? rec.scores : [],
         passed: !!rec.passed,
+        usedBonusIds: Array.isArray(rec.usedBonusIds) ? rec.usedBonusIds : [],
+        maxAttempts: rec.maxAttempts || DEFAULT_MAX_ATTEMPTS,
       }
     },
     [traineeId]
+  )
+
+  const getUsedBonusIds = useCallback(
+    (testId) => {
+      const { usedBonusIds } = getAttempts(testId)
+      return usedBonusIds
+    },
+    [getAttempts]
   )
 
   const getRequiredScore = useCallback(
     (testId) => {
       if (!traineeId || testId === 'bonus_test') return PASSING_SCORE_ATTEMPT_1
       const { count } = getAttempts(testId)
-      return count === 0 ? PASSING_SCORE_ATTEMPT_1 : PASSING_SCORE_ATTEMPT_2
+      if (count >= 2) return PASSING_SCORE_ATTEMPT_3
+      if (count === 1) return PASSING_SCORE_ATTEMPT_2
+      return PASSING_SCORE_ATTEMPT_1
     },
     [traineeId, getAttempts]
   )
 
   const canTake = useCallback(
     (testId, { isPractice = false } = {}) => {
-      if (!traineeId) return { allowed: false, reason: 'Not logged in', requiredScore: PASSING_SCORE_ATTEMPT_1, attempts: 0 }
-      if (testId === 'bonus_test') return { allowed: true, reason: 'Practice test - unlimited attempts', requiredScore: PASSING_SCORE_ATTEMPT_1, attempts: 0 }
-      const { count, scores, passed } = getAttempts(testId)
-      if (passed) return { allowed: true, reason: 'Already passed - retaking for practice', attempts: count }
-      if (count >= 2) return { allowed: false, reason: 'Maximum 2 attempts used. Ask your manager to request a reset.', attempts: count }
-      return { allowed: true, requiredScore: getRequiredScore(testId), attempts: count }
+      if (!traineeId) return { allowed: false, reason: 'Not logged in', requiredScore: PASSING_SCORE_ATTEMPT_1, attempts: 0, maxAttempts: DEFAULT_MAX_ATTEMPTS }
+      if (hydrating) return { allowed: false, reason: 'Checking your test history…', hydrating: true, attempts: 0, maxAttempts: DEFAULT_MAX_ATTEMPTS }
+      if (testId === 'bonus_test') return { allowed: true, reason: 'Practice test - unlimited attempts', requiredScore: PASSING_SCORE_ATTEMPT_1, attempts: 0, maxAttempts: DEFAULT_MAX_ATTEMPTS }
+      const { count, scores, passed, maxAttempts } = getAttempts(testId)
+      if (passed) return { allowed: true, reason: 'Already passed - retaking for practice', attempts: count, maxAttempts }
+      if (count >= maxAttempts) return { allowed: false, reason: `Maximum ${maxAttempts} attempts used. Ask your manager to request a reset.`, attempts: count, maxAttempts }
+      return { allowed: true, requiredScore: getRequiredScore(testId), attempts: count, maxAttempts }
     },
-    [traineeId, getAttempts, getRequiredScore]
+    [traineeId, hydrating, getAttempts, getRequiredScore]
   )
 
   const recordAttempt = useCallback(
@@ -103,14 +184,27 @@ export function useTestAttempts(traineeId) {
       if (!traineeId) return
       const attempts = loadAttempts()
       const key = `${traineeId}_${testId}`
-      const rec = attempts[key] || { count: 0, scores: [], passed: false }
+      const rec = attempts[key] || { count: 0, scores: [], passed: false, usedBonusIds: [], maxAttempts: DEFAULT_MAX_ATTEMPTS }
       rec.count = (rec.count || 0) + 1
       rec.scores = rec.scores || []
       rec.scores.push(score)
       if (passed) rec.passed = true
       if (meta.hintsUsed != null) rec.lastHintsUsed = meta.hintsUsed
+      if (Array.isArray(meta.bonusQuestionIds) && meta.bonusQuestionIds.length > 0) {
+        const existing = new Set(rec.usedBonusIds || [])
+        meta.bonusQuestionIds.forEach((id) => existing.add(id))
+        rec.usedBonusIds = [...existing]
+      }
       attempts[key] = rec
       saveAttempts(attempts)
+      // Persist to Firestore so lockout works cross-browser and trainers can see results
+      saveTestResult(traineeId, testId, {
+        count: rec.count,
+        scores: rec.scores,
+        passed: rec.passed,
+        maxAttempts: rec.maxAttempts || DEFAULT_MAX_ATTEMPTS,
+        usedBonusIds: rec.usedBonusIds || [],
+      })
     },
     [traineeId]
   )
@@ -145,7 +239,9 @@ export function useTestAttempts(traineeId) {
 
   return useMemo(
     () => ({
+      hydrating,
       getAttempts,
+      getUsedBonusIds,
       getRequiredScore,
       canTake,
       recordAttempt,
@@ -153,6 +249,6 @@ export function useTestAttempts(traineeId) {
       isTestPassed,
       resetAttempts,
     }),
-    [getAttempts, getRequiredScore, canTake, recordAttempt, getBestScore, isTestPassed, resetAttempts]
+    [hydrating, getAttempts, getUsedBonusIds, getRequiredScore, canTake, recordAttempt, getBestScore, isTestPassed, resetAttempts]
   )
 }

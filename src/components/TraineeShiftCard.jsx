@@ -1,10 +1,13 @@
 import { SHIFT_META } from '../constants'
-import { formatWhenHuman, getShiftStatus, isShiftComplete } from '../utils/helpers'
+import { formatWhenHuman, getShiftStatus, isShiftComplete, getShiftRequiredTestIds } from '../utils/helpers'
+import { PRETTY_TEST_NAMES } from '../data/quizDatabase'
 
 export default function TraineeShiftCard({
   shiftKey,
   rec,
   staffAccounts = {},
+  traineeId,
+  testAttempts,
   onViewDetail,
   onStudyFlashcards,
   onPracticeTest,
@@ -21,6 +24,28 @@ export default function TraineeShiftCard({
   const status = getShiftStatus(rec, shiftKey)
   const complete = isShiftComplete(rec, shiftKey)
 
+  // Test status per required test
+  const requiredTestIds = getShiftRequiredTestIds(shiftKey, traineeId)
+  const testStatuses = requiredTestIds.map((testId) => {
+    const data = testAttempts?.getAttempts?.(testId) || { count: 0, scores: [], passed: false }
+    const prettyName = PRETTY_TEST_NAMES[testId] || testId.replace(/_/g, ' ')
+    return { testId, prettyName, ...data }
+  })
+  const hasTests = testStatuses.length > 0
+  const anyFailed = hasTests && testStatuses.some((t) => t.count > 0 && !t.passed)
+
+  // Determine if the shift date is in the future
+  const isFutureShift = (() => {
+    if (!item.when) return false
+    try {
+      const shiftDate = new Date(item.when)
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+      shiftDate.setHours(0, 0, 0, 0)
+      return shiftDate.getTime() > today.getTime()
+    } catch (_) { return false }
+  })()
+
   let statusText = 'Not started'
   let statusColor = '#666'
   if (complete) {
@@ -32,6 +57,12 @@ export default function TraineeShiftCard({
   } else if (status.trainerSigned || status.managerSigned) {
     statusText = 'Waiting sign-off'
     statusColor = '#5e35b1'
+  } else if (hasTests && anyFailed) {
+    statusText = 'Tests pending'
+    statusColor = '#c62828'
+  } else if (status.scheduled && isFutureShift) {
+    statusText = 'Upcoming'
+    statusColor = '#1976d2'
   } else if (status.scheduled) {
     statusText = 'In progress'
     statusColor = '#e65100'
@@ -47,6 +78,22 @@ export default function TraineeShiftCard({
           </div>
           <div className="mt-1 text-sm text-gray-600">{whenStr}</div>
           <div className="mt-0.5 text-sm text-gray-500">Trainer: {trainerName}</div>
+          {hasTests && (
+            <div className="mt-2 space-y-1">
+              {testStatuses.map((t) => (
+                <div key={t.testId} className="flex items-center gap-2 text-xs">
+                  {t.passed ? (
+                    <span className="text-green-600 font-semibold">&#10003; Passed</span>
+                  ) : t.count > 0 ? (
+                    <span className="text-red-600 font-semibold">&#10007; {t.count} attempt{t.count !== 1 ? 's' : ''} (best: {Math.max(...t.scores)}%)</span>
+                  ) : (
+                    <span className="text-gray-400">&#9675; Not taken</span>
+                  )}
+                  <span className="text-gray-500">{t.prettyName}</span>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="mt-2 flex flex-wrap gap-2">
             {meta.flashcardSetId && (
               <button
@@ -79,7 +126,7 @@ export default function TraineeShiftCard({
         <div className="flex items-center gap-2">
           {onViewDetail && (
             <button type="button" className="btn btn-small" onClick={() => onViewDetail(shiftKey)}>
-              Details
+              Sign off
             </button>
           )}
           <span

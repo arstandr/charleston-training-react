@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { doc, getDoc } from 'firebase/firestore'
-import { db } from '../firebase'
 import { STORE_TO_TOAST_GUID } from '../constants'
+import { getFromFirestore } from '../utils/firestore'
 
 const DEFAULT_STORES = Object.keys(STORE_TO_TOAST_GUID)
 
@@ -19,16 +18,14 @@ export function useToastStoreGuids() {
   useEffect(() => {
     let cancelled = false
     Promise.all([
-      getDoc(doc(db, 'config', 'toastStoreGuids')),
-      getDoc(doc(db, 'config', 'toastMenuStore')),
-    ]).then(([guidSnap, menuSnap]) => {
+      getFromFirestore('config', 'toastStoreGuids'),
+      getFromFirestore('config', 'toastMenuStore'),
+    ]).then(([guidDoc, menuDoc]) => {
       if (cancelled) return
-      const guids = guidSnap.exists && guidSnap.data() && typeof guidSnap.data() === 'object'
-        ? { ...STORE_TO_TOAST_GUID, ...guidSnap.data() }
+      const guids = guidDoc && typeof guidDoc === 'object'
+        ? { ...STORE_TO_TOAST_GUID, ...guidDoc }
         : { ...STORE_TO_TOAST_GUID }
-      const menu = menuSnap.exists && menuSnap.data()?.store
-        ? menuSnap.data().store
-        : 'Westfield'
+      const menu = menuDoc?.store || 'Westfield'
       setStoreGuids(guids)
       setMenuStore(menu)
     }).catch(() => {
@@ -40,11 +37,13 @@ export function useToastStoreGuids() {
   }, [])
 
   const getRestaurantGuid = useCallback((store) => {
-    return storeGuids[store] || STORE_TO_TOAST_GUID[store] || ''
+    const v = storeGuids[store] || STORE_TO_TOAST_GUID[store] || ''
+    return typeof v === 'string' ? v.trim() : ''
   }, [storeGuids])
 
   const getMenuRestaurantGuid = useCallback(() => {
-    return storeGuids[menuStore] || STORE_TO_TOAST_GUID[menuStore] || ''
+    const v = storeGuids[menuStore] || STORE_TO_TOAST_GUID[menuStore] || ''
+    return typeof v === 'string' ? v.trim() : ''
   }, [storeGuids, menuStore])
 
   return {

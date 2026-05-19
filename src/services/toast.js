@@ -9,7 +9,10 @@ const BASE = 'https://us-central1-chartrain-20901.cloudfunctions.net'
 async function callFunction(name, params = {}, method = 'GET') {
   const url = new URL(`${BASE}/${name}`)
   if (method === 'GET') {
-    Object.entries(params).forEach(([k, v]) => v != null && url.searchParams.set(k, String(v)))
+    Object.entries(params).forEach(([k, v]) => {
+      const s = v != null ? String(v).trim() : ''
+      if (s !== '') url.searchParams.set(k, s)
+    })
   }
   const options = {
     method,

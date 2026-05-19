@@ -6,6 +6,7 @@ import { useConfirm } from '../contexts/ConfirmContext'
 import AppHeader from '../components/AppHeader'
 import OwnerNavBar from '../components/OwnerNavBar'
 import StatCard from '../components/StatCard'
+import ArchivedEmployees from '../components/ArchivedEmployees'
 import { useStaffAccounts } from '../hooks/useStaffAccounts'
 import { useTrainingData } from '../hooks/useTrainingData'
 import {
@@ -21,11 +22,14 @@ import {
   formatWhenHuman,
   getInitials,
 } from '../utils/helpers'
+import { getStoreDisplayName } from '../constants'
 import ManagerTraineeDetailView from '../components/ManagerTraineeDetailView'
 import ManagerAssessSignModal from '../components/ManagerAssessSignModal'
 import { getTrainingDriftReport } from '../services/ai'
 import { STAFF_LOGINS } from '../constants'
 import { SkeletonCard } from '../components/SkeletonCard'
+import TestLockManager from '../components/TestLockManager'
+import ExpandableStoreCard from '../components/ExpandableStoreCard'
 
 const ROLE_OPTIONS = ['trainer', 'manager', 'admin', 'owner']
 
@@ -35,8 +39,8 @@ export default function OwnerDashboard() {
   const { currentUser } = useAuth()
   const { stores } = useOrg()
   const confirm = useConfirm()
-  const { staffAccounts, saveStaffAccounts } = useStaffAccounts()
-  const { trainingData, setTrainingData, saveTrainingData, listTrainees, trainingDataLoading } = useTrainingData()
+  const { staffAccounts, saveStaffAccounts, restoreStaff } = useStaffAccounts()
+  const { trainingData, setTrainingData, saveTrainingData, listTrainees, trainingDataLoading, restoreTrainee } = useTrainingData()
   const empNum = currentUser?.empNum ?? currentUser?.employeeNumber ?? ''
 
   const [view, setView] = useState('overview')
@@ -47,7 +51,7 @@ export default function OwnerDashboard() {
 
   useEffect(() => {
     const stateView = location.state?.view
-    if (stateView && ['overview', 'staff', 'trainees', 'pending'].includes(stateView)) {
+    if (stateView && ['overview', 'staff', 'trainees', 'pending', 'testIntegrity'].includes(stateView)) {
       setView(stateView)
     }
   }, [location.state?.view])
@@ -178,6 +182,17 @@ export default function OwnerDashboard() {
     [staffAccounts]
   )
 
+  const archivedTrainees = useMemo(
+    () => listTrainees({ store: null, includeArchived: true }).filter((t) => t.archived),
+    [trainingData]
+  )
+  const archivedStaffList = useMemo(
+    () => Object.entries(staffAccounts)
+      .filter(([, info]) => info?.archived)
+      .map(([emp, info]) => ({ emp, name: info.name || 'Unnamed', role: info.role || '', store: info.store || '' })),
+    [staffAccounts]
+  )
+
   function handleAddStaff(e) {
     e.preventDefault()
     setAddError('')
@@ -249,11 +264,12 @@ export default function OwnerDashboard() {
     <>
       <AppHeader />
       <div className="container mx-auto max-w-5xl px-4 pb-8">
-        <div className="content-area">
+        <div className="relative z-50 mb-4">
+          <OwnerNavBar />
+        </div>
+        <div className="content-area relative z-0">
           <h2 className="text-xl font-bold text-gray-800 mb-1">Owner Dashboard</h2>
           <p className="text-sm text-gray-600 mb-6">All locations</p>
-
-          <OwnerNavBar />
 
           {/* Toolbar: store, readiness, search */}
           <div className="flex flex-wrap items-center gap-3 mb-4">
@@ -264,9 +280,9 @@ export default function OwnerDashboard() {
                 value={ownerStoreFilter ?? ''}
                 onChange={(e) => setOwnerStoreFilter(e.target.value === '' ? null : e.target.value)}
               >
-                <option value="">All</option>
+                <option value="">All (Company)</option>
                 {stores.map((s) => (
-                  <option key={s} value={s}>{s}</option>
+                  <option key={s} value={s}>{getStoreDisplayName(s)}</option>
                 ))}
               </select>
             </label>
@@ -323,61 +339,24 @@ export default function OwnerDashboard() {
                 />
               </div>
 
-              {/* Per-store cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+              {/* Per-store expandable cards */}
+              <div className="space-y-4">
                 {storeStats.map((s) => (
-                  <div
+                  <ExpandableStoreCard
                     key={s.store}
-                    className="rounded-2xl border-2 border-[var(--color-primary)] bg-gradient-to-br from-green-50 to-white p-5 shadow-sm"
-                  >
-                    <h3 className="text-lg font-bold text-gray-800 mb-3">{s.store}</h3>
-                    <div className="grid grid-cols-2 gap-3 text-sm mb-4">
-                      <div>
-                        <div className="text-2xl font-bold text-gray-800">{s.trainees}</div>
-                        <div className="text-gray-500 text-xs">Trainees</div>
-                      </div>
-                      <div>
-                        <div className="text-2xl font-bold text-green-700">{s.certified}</div>
-                        <div className="text-gray-500 text-xs">Certified</div>
-                      </div>
-                      <div>
-                        <div className="text-2xl font-bold text-gray-800">{s.trainerCount}</div>
-                        <div className="text-gray-500 text-xs">Trainers</div>
-                      </div>
-                      <div>
-                        <div className="text-2xl font-bold text-gray-800">{s.managerCount}</div>
-                        <div className="text-gray-500 text-xs">Managers</div>
-                      </div>
-                    </div>
-                    {/* Progress bar */}
-                    <div className="mb-2">
-                      <div className="flex justify-between text-xs text-gray-500 mb-1">
-                        <span>Avg certification progress</span>
-                        <span>{s.avgProgress}%</span>
-                      </div>
-                      <div className="h-2.5 rounded-full bg-gray-200 overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-[var(--color-primary)] transition-all"
-                          style={{ width: `${s.avgProgress}%` }}
-                        />
-                      </div>
-                    </div>
-                    {/* Action items */}
-                    {(s.pendingClaims > 0 || s.awaitingSignOff > 0) && (
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {s.pendingClaims > 0 && (
-                          <span className="inline-block rounded-full bg-amber-100 text-amber-800 px-2.5 py-0.5 text-xs font-medium">
-                            {s.pendingClaims} pending claim{s.pendingClaims !== 1 ? 's' : ''}
-                          </span>
-                        )}
-                        {s.awaitingSignOff > 0 && (
-                          <span className="inline-block rounded-full bg-blue-100 text-blue-800 px-2.5 py-0.5 text-xs font-medium">
-                            {s.awaitingSignOff} awaiting sign-off
-                          </span>
-                        )}
-                      </div>
-                    )}
-                  </div>
+                    store={s.store}
+                    storeStats={s}
+                    trainingData={trainingData}
+                    staffAccounts={staffAccounts}
+                    stores={stores}
+                    onArchiveManager={(empNum) => confirm('Archive this manager? They can be restored from Archived employees.', 'Archive manager').then((ok) => ok && handleArchiveStaff(empNum))}
+                    onChangeManagerRole={handleChangeRole}
+                    onChangeManagerStore={handleChangeStore}
+                    archivedTrainees={archivedTrainees.filter((t) => (t.store || '') === s.store)}
+                    archivedStaff={archivedStaffList.filter((st) => st.store === s.store || st.store === 'All')}
+                    onRestoreTrainee={(id) => { restoreTrainee(id) }}
+                    onRestoreStaff={(emp) => { restoreStaff(emp) }}
+                  />
                 ))}
               </div>
 
@@ -408,7 +387,30 @@ export default function OwnerDashboard() {
                   {driftLoading ? 'Generating…' : 'Generate report'}
                 </button>
               </section>
+
+              <section className="mt-6">
+                <button
+                  type="button"
+                  className="btn btn-small btn-secondary"
+                  onClick={() => setView('testIntegrity')}
+                >
+                  🔒 Test Integrity (locks & violations)
+                </button>
+              </section>
             </>
+          )}
+
+          {view === 'testIntegrity' && (
+            <div className="space-y-6">
+              <button
+                type="button"
+                className="btn btn-small mb-2"
+                onClick={() => setView('overview')}
+              >
+                ← Overview
+              </button>
+              <TestLockManager />
+            </div>
           )}
 
           {/* ===== STAFF ===== */}
@@ -759,6 +761,7 @@ export default function OwnerDashboard() {
           onClose={() => setViewTraineeDetailId(null)}
         />
       )}
+
     </>
   )
 }

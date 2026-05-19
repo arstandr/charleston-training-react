@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { validateEmployeeNumber } from '../utils/helpers'
+import { getStoreDisplayName } from '../constants'
 
 export default function EditTraineeModal({ open, trainee, stores = [], onSave, onClose }) {
   const [name, setName] = useState('')
@@ -86,7 +87,7 @@ export default function EditTraineeModal({ open, trainee, stores = [], onSave, o
               onChange={(e) => setStore(e.target.value)}
             >
               {(stores.length ? stores : ['Westfield', 'Castleton']).map((s) => (
-                <option key={s} value={s}>{s}</option>
+                <option key={s} value={s}>{getStoreDisplayName(s)}</option>
               ))}
             </select>
           </div>

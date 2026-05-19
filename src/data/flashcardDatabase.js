@@ -4,10 +4,10 @@ export const VERBAL_CERT_DECK = {
   title: 'Study for Certification',
   category: 'Certification',
   cards: [
-    { front: 'What is our phone number?', back: 'Westfield: (317) 846-5965\nCastleton: (317) 841-0442' },
-    { front: 'Who are the Managers?', back: 'Owner: Gary Richenberg.\nWestfield: Adam (GM).\nCastleton: Ben (GM).\nKitchen Managers: Jorge Pineda (check schedule).' },
-    { front: 'Where do you park?', back: 'Westfield: Southside of building, 2 rows back (front of Best Buy).\nCastleton: Back of the restaurant.' },
-    { front: 'What is our address?', back: 'Westfield: 14636 Greyhound Plaza, Carmel, IN 46032 | (317) 846-5965\nCastleton: 6815 E. 82nd Street, Indianapolis, IN 46250 | (317) 841-0442' },
+    { front: 'What is our phone number?', back: 'Carmel: (317) 846-5965\nIndianapolis: (317) 841-0442' },
+    { front: 'Who are the Managers?', back: 'Owner: Gary Richenberg.\nCarmel: Adam (GM).\nIndianapolis: Ben (GM).\nKitchen Managers: Jorge Pineda (check schedule).' },
+    { front: 'Where do you park?', back: 'Carmel: Southside of building, 2 rows back (front of Best Buy).\nIndianapolis: Back of the restaurant.' },
+    { front: 'What is our address?', back: 'Carmel: 14636 Greyhound Plaza, Carmel, IN 46032 | (317) 846-5965\nIndianapolis: 6815 E. 82nd Street, Indianapolis, IN 46250 | (317) 841-0442' },
     { front: 'Proper phone greeting?', back: '"Good [Morning/Afternoon/Evening], Charleston\'s [Location], this is [Name]."' },
     { front: 'Do we take checks?', back: 'No personal checks. Traveler checks OK.' },
     { front: 'What credit cards do we accept?', back: 'Visa, MasterCard, Amex, Discover.' },
@@ -21,12 +21,12 @@ export const VERBAL_CERT_DECK = {
 
 // Study for Certification – full flashcard deck (real answers from training docs)
 const VERBAL_CERT_STUDY_DATA = [
-  { front: "What is our phone number?", back: "Westfield: (317) 846-5965\nCastleton: (317) 841-0442" },
-  { front: "What is our address?", back: "Westfield: 14636 Greyhound Plaza, Carmel, IN 46032 | (317) 846-5965\nCastleton: 6815 E. 82nd Street, Indianapolis, IN 46250 | (317) 841-0442" },
+  { front: "What is our phone number?", back: "Carmel: (317) 846-5965\nIndianapolis: (317) 841-0442" },
+  { front: "What is our address?", back: "Carmel: 14636 Greyhound Plaza, Carmel, IN 46032 | (317) 846-5965\nIndianapolis: 6815 E. 82nd Street, Indianapolis, IN 46250 | (317) 841-0442" },
   { front: "Who are the Managers?", back: "Owner: Gary Richenberg.\nGeneral Managers: Adam Standridge / Adam Skees / Ben Goode (check schedule).\nKitchen Managers: Jorge Pineda." },
   { front: "When is your schedule request due?", back: "Sunday, two weeks prior to the posting of the new schedule." },
   { front: "Who writes your schedule?", back: "The General Manager or Scheduling Manager." },
-  { front: "Where do you park?", back: "Westfield: Southside of building, 2 rows back (front of Best Buy).\nCastleton: Back of the restaurant." },
+  { front: "Where do you park?", back: "Carmel: Southside of building, 2 rows back (front of Best Buy).\nIndianapolis: Back of the restaurant." },
   { front: "What is the proper way to answer the phone?", back: "\"Good [Morning/Afternoon/Evening], Charleston's [Location], this is [Name].\"" },
   { front: "How do you place someone on hold?", back: "Ask for permission: \"May I place you on a brief hold?\" Wait for answer." },
   { front: "Do we take checks? Traveler checks?", back: "No personal checks." },
@@ -96,8 +96,8 @@ function backWithNewlines(s) {
   return s.replace(/\\n/g, '\n')
 }
 
-// Complete Flashcard Database - All 148 cards (backs use \n for line breaks)
-export const FLASHCARD_DATABASE = {
+// Complete Flashcard Database - All 148 cards (backs use \n for line breaks). Assign then export at end to avoid TDZ when chunk is preloaded.
+const FLASHCARD_DATABASE = {
   'steaks-specialties': [
     { front: "Hand-cut Filet", back: backWithNewlines("• 7oz center cut\\n• Mixed vegetable medley\\n• House or Caesar salad") },
     { front: "Charleston's Ribeye", back: backWithNewlines("• 14oz boneless ribeye\\n• Fried onion straws\\n• Mashed Potatoes\\n• House or Caesar salad") },
@@ -280,14 +280,34 @@ export const FLASHCARD_DATABASE = {
     { front: "What phrase should you use when reaching across a guest?", back: "Use the phrase 'Pardon my reach' if you must reach across a guest (common in booths)." },
     { front: "When are schedule requests due?", back: "Requests must be in by the Sunday two weeks prior to the posting of the new schedule." },
   ],
-  verbal_cert: VERBAL_CERT_STUDY_DATA,
+  upselling: [
+    { front: "Guest orders a Vodka & Tonic — what do you upsell?", back: "Grey Goose, Tito's, Belvedere, or Absolut" },
+    { front: "What does A B C stand for in upselling bourbon?", back: "Angel's Envy, Basil Hayden, Woodford" },
+    { front: "Guest orders a Manhattan or Old Fashioned — what bourbon do you suggest?", back: "Angel's Envy, Basil Hayden, or Woodford (the A B C's)" },
+    { front: "Best way to increase sales when featuring?", back: "Include a bottle of wine pairing with the feature" },
+    { front: "Guest orders dessert — what drink do you upsell?", back: "Espresso Martini, Coffee, or Chocolatini" },
+    { front: "Guest orders an entrée without a salad — how do you ring in the upsell?", back: "House $/Caesar $ (rings in at upcharge price)" },
+    { front: "Guest orders a burger — what can you upsell as an extra?", back: "Extra Burger Patty" },
+    { front: "Guest orders a cup of soup — what do you suggest?", back: "Bowl of Soup (only $1 more)" },
+    { front: "Prime Rib upsell — what larger sizes are available?", back: "16oz, 18oz, 20oz, 22oz, etc." },
+    { front: "What extras can you upsell on a salad?", back: "Avocado, Anchovies, Bacon, Blue Cheese Crumbles, Cheese" },
+    { front: "What is the easiest way to increase your sales?", back: "Upselling — make the most money in the least time with the least effort" },
+    { front: "When team-greeting a table, what should you always try to do?", back: "Suggestive selling & featuring — treat the table as though it's yours, ring in bar drinks & apps" },
+    { front: "Guest orders a glass of wine — what should you suggest instead?", back: "A bottle of wine (especially if 2+ guests are drinking wine)" },
+    { front: "What are the D.A.D. words for upselling in your greet?", back: "Drinks, Appetizers, Desserts — mention all three in every greet" },
+  ],
 }
+// Assign after object creation to avoid "Cannot access before initialization" in bundled chunk
+FLASHCARD_DATABASE.verbal_cert = VERBAL_CERT_STUDY_DATA
 
-export const FLASHCARD_SETS = [
+const FLASHCARD_SETS = [
   { id: 'steaks-specialties', title: 'Steaks, Specialties, Chicken & Desserts', category: 'Menu', cardCount: 26, description: 'Learn all entrees, sides, kids meals, and desserts' },
   { id: 'bar-beer', title: 'Bar & Beer Knowledge', category: 'Bar', cardCount: 43, description: 'Domestic & import beers, spirits, and bar procedures' },
   { id: 'wines-cocktails', title: 'Wine & Cocktail Knowledge', category: 'Bar', cardCount: 37, description: 'Complete wine list and signature cocktails' },
   { id: 'starters-soups-salads', title: 'Starters, Soups, Salads & Sandwiches', category: 'Menu', cardCount: 42, description: 'Appetizers, daily soups, salads, burgers, and sandwiches' },
   { id: 'bonus-points', title: 'Bonus Points', category: 'Bonus', cardCount: 25, description: 'Extra practice from service standards, procedures, and policy' },
   { id: 'verbal_cert', title: 'Study for Certification', category: 'Certification', cardCount: 67, description: 'Real answers from training docs for verbal certification' },
+  { id: 'upselling', title: 'Upselling Techniques', category: 'Service', icon: '💰', cardCount: 14, description: "Maximize sales with smart upselling — from the Charleston's Training Manual" },
 ]
+
+export { FLASHCARD_DATABASE, FLASHCARD_SETS }

@@ -1,18 +1,10 @@
-import { useMemo } from 'react'
+import { useMemo, memo } from 'react'
 import { getInitials, getShiftProgressByTrainerSign } from '../utils/helpers'
 import { analyzeTraineeRisk, getLastActivityDate } from '../utils/RiskEngine'
+import { getStoreDisplayName } from '../constants'
+import { getOfficialTestIds } from '../services/testAttemptResets'
 
-const TEST_ATTEMPTS_KEY = 'testAttempts'
-
-function loadTestAttempts() {
-  try {
-    return JSON.parse(localStorage.getItem(TEST_ATTEMPTS_KEY) || '{}') || {}
-  } catch (_) {
-    return {}
-  }
-}
-
-export default function TraineeCard({
+export default memo(function TraineeCard({
   trainee,
   trainingData,
   testAttempts: testAttemptsProp,
@@ -24,9 +16,11 @@ export default function TraineeCard({
   onInsight,
   onArchive,
   onResetAttempts,
+  onReviewTest,
   onPrintSummary,
   onEditTrainee,
   onAddNote,
+  onVerbalCert,
   onViewDetails,
   onDeleteTrainee,
   variant,
@@ -36,7 +30,30 @@ export default function TraineeCard({
     () => (trainingData && id ? { ...trainee, ...(trainingData[id] || {}) } : trainee),
     [trainee, trainingData, id]
   )
-  const testAttempts = useMemo(() => testAttemptsProp ?? loadTestAttempts(), [testAttemptsProp])
+  const testAttempts = testAttemptsProp || {}
+
+  // Check if trainee is locked out of any test (count >= maxAttempts without passing)
+  const hasLockedTest = useMemo(() => {
+    if (!id) return false
+    const officialIds = getOfficialTestIds()
+    return officialIds.some((testId) => {
+      const rec = testAttempts[`${id}_${testId}`]
+      if (!rec) return false
+      const count = rec.count || 0
+      const max = rec.maxAttempts || 2
+      return count >= max && !rec.passed
+    })
+  }, [id, testAttempts])
+
+  // Check if trainee has attempted any test (for review button)
+  const hasAnyTest = useMemo(() => {
+    if (!id) return false
+    const officialIds = getOfficialTestIds()
+    return officialIds.some((testId) => {
+      const rec = testAttempts[`${id}_${testId}`]
+      return rec && (rec.count || 0) > 0
+    })
+  }, [id, testAttempts])
 
   const { completedShifts, totalShifts } = getShiftProgressByTrainerSign(rec)
   const progressPct = totalShifts ? Math.round((completedShifts / totalShifts) * 100) : 0
@@ -74,7 +91,7 @@ export default function TraineeCard({
         </div>
         <div className="min-w-0 flex-1">
           <div className="font-bold text-gray-800">{name || 'Unnamed'}</div>
-          <div className="text-gray-500 text-sm">#{employeeNumber || id} · {store || '—'}</div>
+          <div className="text-gray-500 text-sm">#{employeeNumber || id} · {store ? getStoreDisplayName(store) : '—'}</div>
           <div className="text-gray-400 text-xs mt-0.5">Last Active: {lastActiveText}</div>
           {readiness?.average != null && (
             <div className="text-gray-500 text-xs mt-0.5">
@@ -106,6 +123,11 @@ export default function TraineeCard({
         <span className={`inline-block px-2.5 py-1 rounded-xl text-xs font-bold ${statusBadge.className}`}>
           {statusBadge.text}
         </span>
+        {hasLockedTest && (
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-bold bg-red-600 text-white animate-pulse">
+            TEST LOCKED
+          </span>
+        )}
         {risk?.drivers?.length > 0 && (
           <span className="text-xs text-gray-500" title={risk.drivers.join(', ')}>
             {risk.drivers.slice(0, 2).join(' · ')}
@@ -120,12 +142,17 @@ export default function TraineeCard({
         )}
         {onAssess && !archived && (
           <button type="button" className="btn btn-small btn-secondary" onClick={(e) => { e.stopPropagation(); onAssess(id) }}>
-            Assess
+            Sign off
           </button>
         )}
         {onInsight && !archived && (
           <button type="button" className="btn btn-small btn-secondary" onClick={(e) => { e.stopPropagation(); onInsight(id) }}>
-            Insight
+            AI Assess
+          </button>
+        )}
+        {onVerbalCert && !archived && (
+          <button type="button" className="btn btn-small btn-green" onClick={(e) => { e.stopPropagation(); onVerbalCert(id) }}>
+            🎓 Verbal Cert
           </button>
         )}
         {onEditTrainee && !archived && (
@@ -145,12 +172,17 @@ export default function TraineeCard({
         )}
         {onArchive && (
           <button type="button" className="btn btn-small btn-secondary" onClick={() => onArchive(id)}>
-            {archived ? 'Restore' : 'Archive'}
+            {archived ? 'Restore' : 'Remove'}
+          </button>
+        )}
+        {onReviewTest && hasAnyTest && !archived && (
+          <button type="button" className="btn btn-small" style={{ background: '#f59e0b', borderColor: '#f59e0b', color: '#fff' }} onClick={() => onReviewTest(id)}>
+            Review test
           </button>
         )}
         {onResetAttempts && !archived && (
-          <button type="button" className="btn btn-small btn-secondary" onClick={() => onResetAttempts(id)}>
-            Reset test attempts
+          <button type="button" className={`btn btn-small ${hasLockedTest ? 'bg-red-600 text-white hover:bg-red-700' : 'btn-secondary'}`} onClick={() => onResetAttempts(id)}>
+            Reset tests
           </button>
         )}
         {onPrintSummary && !archived && (
@@ -166,4 +198,4 @@ export default function TraineeCard({
       </div>
     </div>
   )
-}
+})

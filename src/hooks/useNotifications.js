@@ -1,50 +1,46 @@
 import { useState, useEffect } from 'react'
-import { collection, query, where, limit, onSnapshot, updateDoc, doc } from 'firebase/firestore'
-import { db } from '../firebase'
+import { getNotificationsForUser, markNotificationRead } from '../services/notificationService'
 
-const COLLECTION = 'notifications'
 const LIMIT = 50
+const POLL_MS = 30000
 
 export function useNotifications(uid) {
   const [items, setItems] = useState([])
   const [unreadCount, setUnreadCount] = useState(0)
 
   useEffect(() => {
-    if (!uid || !db) {
+    if (!uid) {
       setItems([])
       setUnreadCount(0)
       return
     }
-    const ref = collection(db, COLLECTION)
-    const q = query(ref, where('userId', '==', uid), limit(LIMIT))
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        const list = snap.docs.map((d) => ({
-          id: d.id,
-          ...d.data(),
-        }))
-        list.sort((a, b) => {
-          const ta = a.timestamp?.toMillis?.() ?? a.createdAt?.toMillis?.() ?? 0
-          const tb = b.timestamp?.toMillis?.() ?? b.createdAt?.toMillis?.() ?? 0
-          return tb - ta
-        })
-        setItems(list)
-        setUnreadCount(list.filter((x) => !x.read).length)
-      },
-      (err) => {
-        console.warn('[useNotifications]', err?.message)
-        setItems([])
-        setUnreadCount(0)
+    let cancelled = false
+    async function fetchList() {
+      if (cancelled) return
+      try {
+        const list = await getNotificationsForUser(uid, LIMIT)
+        if (!cancelled) {
+          setItems(list)
+          setUnreadCount(list.filter((x) => !x.read).length)
+        }
+      } catch (err) {
+        console.error('[useNotifications] Fetch failed:', err?.message || err)
+        if (!cancelled) setItems([])
+        if (!cancelled) setUnreadCount(0)
       }
-    )
-    return () => unsub()
+    }
+    fetchList()
+    const interval = setInterval(fetchList, POLL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
   }, [uid])
 
   async function markAsRead(docId) {
-    if (!docId || !db) return
+    if (!docId) return
     try {
-      await updateDoc(doc(db, COLLECTION, docId), { read: true })
+      await markNotificationRead(docId)
     } catch (_) {}
   }
 

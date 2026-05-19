@@ -1,10 +1,10 @@
 import { useEffect, useState, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { auth } from '../firebase'
 import { useNotifications } from '../hooks/useNotifications'
-
-const DARK_MODE_KEY = 'chartrain-dark-mode'
+import ThemeToggle from './ThemeToggle'
+import ProfileAvatar from './ProfileAvatar'
 
 function roleLabel(role) {
   if (!role) return 'User'
@@ -28,7 +28,9 @@ function roleClass(role) {
 
 export default function AppHeader() {
   const navigate = useNavigate()
-  const { currentUser, logout } = useAuth()
+  const { currentUser, logout, exitImpersonation } = useAuth()
+  const realRole = (currentUser?._realUser?.role || '').toLowerCase()
+  const isImpersonating = currentUser?._impersonating === true && (realRole === 'admin' || realRole === 'owner')
   const [authUid, setAuthUid] = useState(() => auth.currentUser?.uid ?? null)
   const { items: notificationItems, unreadCount, markAsRead, markAllRead } = useNotifications(authUid)
   const [notifOpen, setNotifOpen] = useState(false)
@@ -49,38 +51,62 @@ export default function AppHeader() {
     }
   }, [notifOpen])
 
-  const [darkMode, setDarkMode] = useState(() => {
-    try {
-      return localStorage.getItem(DARK_MODE_KEY) === '1'
-    } catch {
-      return false
-    }
-  })
-
-  useEffect(() => {
-    const root = document.documentElement
-    if (darkMode) {
-      root.classList.add('dark-mode')
-    } else {
-      root.classList.remove('dark-mode')
-    }
-    try {
-      localStorage.setItem(DARK_MODE_KEY, darkMode ? '1' : '0')
-    } catch (_) {}
-  }, [darkMode])
-
   function handleLogout() {
     logout()
     navigate('/login', { replace: true })
   }
 
+  function handleExitImpersonation() {
+    exitImpersonation()
+    navigate('/owner', { replace: true })
+  }
+
+  function handleSwitchRole() {
+    exitImpersonation()
+    navigate('/login', { replace: true, state: { switchRole: true } })
+  }
+
   return (
+    <>
+      {isImpersonating && (
+        <div className="bg-amber-500 text-white text-center text-sm font-medium px-4 py-2 flex items-center justify-center gap-3 flex-wrap">
+          <span>
+            Viewing as {roleLabel(currentUser?.role)}
+            {currentUser?.store ? ` at ${currentUser.store}` : ''}
+            {currentUser?.name ? ` (${currentUser.name})` : ''}
+          </span>
+          <button
+            type="button"
+            className="rounded bg-white/20 px-3 py-1 text-xs font-bold hover:bg-white/30 transition-colors"
+            onClick={handleSwitchRole}
+          >
+            Switch Role
+          </button>
+          <button
+            type="button"
+            className="rounded bg-white/20 px-3 py-1 text-xs font-bold hover:bg-white/30 transition-colors"
+            onClick={handleExitImpersonation}
+          >
+            Exit to Admin &rarr;
+          </button>
+        </div>
+      )}
     <header className="app-header">
-      <div className="app-header-brand">Charleston&apos;s Training</div>
-      <div className="app-header-greeting text-center">
-        <span id="userName" className="text-lg font-semibold text-white">
-          {currentUser?.name || 'User'}
-        </span>
+      <div className="app-header-brand">
+        Charleston&apos;s Training
+        {['admin', 'owner'].includes(String(currentUser?.role).toLowerCase()) && (
+          <span className="hidden sm:inline ml-2 text-xs font-normal opacity-80" title={`Build: ${typeof __BUILD_AT__ !== 'undefined' ? __BUILD_AT__ : 'dev'}`}>
+            (build {typeof __BUILD_AT__ !== 'undefined' ? new Date(__BUILD_AT__).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'dev'})
+          </span>
+        )}
+      </div>
+      <div className="app-header-greeting flex items-center justify-center gap-2">
+        <Link to="/profile" className="flex items-center gap-2 text-white hover:opacity-90">
+          <ProfileAvatar user={currentUser} size="sm" />
+          <span id="userName" className="text-lg font-semibold">
+            {currentUser?.name || 'User'}
+          </span>
+        </Link>
       </div>
       <div className="app-header-actions flex items-center gap-2">
         <div className="relative" ref={notifRef}>
@@ -88,8 +114,9 @@ export default function AppHeader() {
             type="button"
             onClick={() => setNotifOpen((o) => !o)}
             className="app-header-btn app-header-btn-logout relative"
-            title="Notifications"
-            aria-label="Notifications"
+            style={unreadCount === 0 ? { opacity: 0.6 } : undefined}
+            title={unreadCount > 0 ? `${unreadCount} unread notification${unreadCount === 1 ? '' : 's'}` : 'No notifications'}
+            aria-label={unreadCount > 0 ? `${unreadCount} unread notifications` : 'No notifications'}
           >
             🔔
             {unreadCount > 0 && (
@@ -99,7 +126,7 @@ export default function AppHeader() {
             )}
           </button>
           {notifOpen && (
-            <div className="absolute right-0 top-full z-50 mt-1 w-80 rounded-xl border border-gray-200 bg-white shadow-lg">
+            <div className="absolute right-0 top-full z-[9999] mt-1 w-80 rounded-xl border border-gray-200 bg-white shadow-lg">
               <div className="flex items-center justify-between border-b border-gray-200 px-3 py-2">
                 <span className="font-semibold text-gray-800">Notifications</span>
                 {unreadCount > 0 && (
@@ -135,20 +162,13 @@ export default function AppHeader() {
             </div>
           )}
         </div>
-        <button
-          type="button"
-          onClick={() => setDarkMode((d) => !d)}
-          className="app-header-btn app-header-btn-logout"
-          title={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-          aria-label={darkMode ? 'Light mode' : 'Dark mode'}
-        >
-          {darkMode ? '☀️' : '🌙'}
-        </button>
-        <span className={roleClass(currentUser?.role)}>{roleLabel(currentUser?.role)}</span>
-        <button type="button" onClick={handleLogout} className="app-header-btn app-header-btn-logout">
+        <ThemeToggle />
+        <span className={`hidden sm:inline ${roleClass(currentUser?.role)}`}>{roleLabel(currentUser?.role)}</span>
+        <button type="button" onClick={handleLogout} className="app-header-btn app-header-btn-logout min-h-[44px]">
           Log out
         </button>
       </div>
     </header>
+    </>
   )
 }

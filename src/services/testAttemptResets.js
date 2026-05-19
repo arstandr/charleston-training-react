@@ -4,6 +4,7 @@
  */
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore'
 import { db } from '../firebase'
+import { resetTestResult } from './quizAttemptsService'
 
 const COLLECTION = 'testAttemptResets'
 
@@ -32,6 +33,8 @@ export async function requestTestAttemptReset(traineeId, testId, byEmpNum) {
       resets[testId] = { at, by }
     }
     await setDoc(ref, { resets }, { merge: true })
+    // Also reset Firestore testResults so cross-browser hydration gives 1 retake
+    await resetTestResult(traineeId, testId, getOfficialTestIds())
     return true
   } catch (e) {
     console.warn('[testAttemptResets] request failed:', e?.message)
@@ -63,8 +66,8 @@ export async function getTestAttemptResets(traineeId) {
   }
 }
 
-import { QUIZ_DATABASE } from '../data/quizDatabase'
+import { TESTS } from '../data/quizDatabase'
 
 export function getOfficialTestIds() {
-  return Object.keys(QUIZ_DATABASE || {}).filter((id) => id !== 'bonus_test')
+  return TESTS.map((t) => t.id).filter((id) => id !== 'bonus_test')
 }

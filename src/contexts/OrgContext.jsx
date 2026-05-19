@@ -1,7 +1,6 @@
 import { createContext, useContext, useState, useEffect } from 'react'
-import { doc, getDoc } from 'firebase/firestore'
-import { db } from '../firebase'
 import { useAuth } from './AuthContext'
+import { getFromFirestore } from '../utils/firestore'
 
 const DEFAULT_ORG_ID = 'org_charlestons'
 
@@ -27,17 +26,10 @@ export function OrgProvider({ children }) {
   useEffect(() => {
     let cancelled = false
     async function fetchOrg() {
-      if (!db) {
-        if (!cancelled) setOrgData(defaultOrgData)
-        if (!cancelled) setLoading(false)
-        return
-      }
       try {
-        const ref = doc(db, 'organizations', orgId)
-        const snap = await getDoc(ref)
+        const d = await getFromFirestore('organizations', orgId)
         if (cancelled) return
-        if (snap.exists() && snap.data()) {
-          const d = snap.data()
+        if (d) {
           setOrgData({
             name: d.name ?? defaultOrgData.name,
             slug: d.slug ?? defaultOrgData.slug,

@@ -25,7 +25,7 @@ export const MANAGER_ASSESSMENT_CONFIG = {
     title: '2nd Reverse Assessment (Dinner/Bar)',
     questions: [
       { id: 'carding', label: 'ID & Alcohol Safety', desc: 'Did they check ID for <40? Aware of limits?' },
-      { id: 'trays', label: 'Tray Service', desc: "Carried drinks properly? No 'clawing' glasses?" },
+      { id: 'trays', label: 'Drink Service', desc: "Carried drinks properly? No 'clawing' glasses?" },
       { id: 'sales', label: 'Bar Salesmanship', desc: "Suggested specific liquor (Tito's vs Vodka)?" },
       { id: 'consolidation', label: 'Bar Consolidation', desc: 'Ran drinks for others? No tunnel vision?' },
     ],

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { validateEmployeeNumber } from '../utils/helpers'
+import { getStoreDisplayName } from '../constants'
 
 export default function AddTraineeModal({ open, store, onAdd, onClose }) {
   const [employeeNumber, setEmployeeNumber] = useState('')
@@ -43,7 +44,7 @@ export default function AddTraineeModal({ open, store, onAdd, onClose }) {
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="text-xl font-bold text-gray-800">Add trainee</h2>
-        <p className="mt-1 text-sm text-gray-500">{store || 'Westfield'} location</p>
+        <p className="mt-1 text-sm text-gray-500">{getStoreDisplayName(store || 'Westfield')} location</p>
         <form onSubmit={handleSubmit} className="mt-4">
           <div className="mb-4">
             <label htmlFor="addTraineeEmp" className="mb-1 block text-sm font-medium text-gray-700">

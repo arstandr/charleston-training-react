@@ -78,6 +78,194 @@ ${cardTexts || 'No cards provided.'}`
 }
 
 /**
+ * Generate a multiple-choice quiz question from a flashcard using Gemini.
+ *
+ * Rules:
+ * - The correct answer is ALWAYS card.back verbatim — never reworded.
+ * - If front already ends with "?", it is used as the question verbatim.
+ * - If front is a term/label, Gemini frames it as a question (one call covers both tasks).
+ * - Gemini only generates the 3 distractors (similar-but-wrong answers).
+ * - siblingBacks: backs of other cards in the same set — passed in so Gemini can generate
+ *   distractors that are grounded in real menu content rather than invented answers.
+ *
+ * Returns { q, opts, ans, exp } or null on failure.
+ */
+export async function autoGenerateQuizForCard(front, back, siblingBacks = []) {
+  if (!front || !back) return null
+
+  const frontIsQuestion = front.trim().endsWith('?')
+
+  const siblingContext = siblingBacks.length > 0
+    ? `\nFor inspiration, here are other real answers from the same flashcard set (do NOT copy them verbatim, but use them to understand the style and domain): ${siblingBacks.slice(0, 12).join(' | ')}`
+    : ''
+
+  const prompt = frontIsQuestion
+    ? `You are building a restaurant training quiz.
+
+FLASHCARD QUESTION (use EXACTLY, word for word): "${front}"
+CORRECT ANSWER (use EXACTLY, word for word — do not change anything): "${back}"
+${siblingContext}
+
+Generate exactly 3 WRONG answers. Each wrong answer must:
+- Match the style, length, and format of the correct answer
+- Sound plausible to someone who did not study
+- Be clearly wrong to someone who did study
+- NOT be copied verbatim from the sibling answers above
+
+Return ONLY a JSON object, no markdown, no explanation:
+{"distractors": ["wrong 1", "wrong 2", "wrong 3"]}`
+    : `You are building a restaurant training quiz.
+
+FLASHCARD FRONT — this is a term, not a question yet: "${front}"
+CORRECT ANSWER (use EXACTLY, word for word — do not change anything): "${back}"
+${siblingContext}
+
+Task 1: Write a clear, simple question that asks about the front term. Examples: "What is [term]?", "What comes with [term]?", "How is [term] prepared?". Pick the phrasing that best fits the correct answer.
+Task 2: Generate exactly 3 WRONG answers. Each wrong answer must:
+- Match the style, length, and format of the correct answer
+- Sound plausible to someone who did not study
+- Be clearly wrong to someone who did study
+- NOT be copied verbatim from the sibling answers above
+
+Return ONLY a JSON object, no markdown, no explanation:
+{"q": "the question text", "distractors": ["wrong 1", "wrong 2", "wrong 3"]}`
+
+  try {
+    const response = await callGemini([{ role: 'user', parts: [{ text: prompt }] }], {
+      maxOutputTokens: 512,
+      temperature: 0.4,
+    })
+
+    const cleaned = (typeof response === 'string' ? response : '')
+      .replace(/```(?:json)?\s*/gi, '')
+      .replace(/\s*```/g, '')
+      .trim()
+
+    const parsed = JSON.parse(cleaned)
+
+    if (!Array.isArray(parsed.distractors) || parsed.distractors.length < 3) return null
+
+    const question = frontIsQuestion ? front.trim() : (parsed.q || `What is ${front}?`)
+
+    // Build opts with correct answer + 3 distractors, then shuffle
+    const opts = [back, ...parsed.distractors.slice(0, 3)]
+    for (let i = opts.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [opts[i], opts[j]] = [opts[j], opts[i]]
+    }
+    // ans points to wherever the correct answer landed after shuffle
+    const ans = opts.findIndex((o) => o === back)
+
+    return {
+      q: question,
+      opts,
+      ans,
+      exp: `Correct answer: ${back}`,
+    }
+  } catch (e) {
+    console.warn('[QuizGen] Failed for "' + front + '":', e.message)
+    return null
+  }
+}
+
+/**
+ * Reconcile a flashcard's back text with its quiz question.
+ * Returns an enriched back string that covers all details tested by the quiz,
+ * or null on failure.
+ */
+export async function reconcileCardBackWithQuiz(front, currentBack, quizQuestion, correctAnswer) {
+  if (!front || !currentBack || !quizQuestion || !correctAnswer) return null
+
+  const prompt = `Task: Update a restaurant training flashcard's BACK text so a trainee who studies it will be able to answer the quiz question correctly.
+
+FLASHCARD FRONT: "${front}"
+CURRENT FLASHCARD BACK: "${currentBack}"
+
+QUIZ QUESTION: "${quizQuestion}"
+CORRECT ANSWER: "${correctAnswer}"
+
+RULES:
+1. Keep ALL existing information from the current BACK — do not remove anything.
+2. Add any specific details from the CORRECT ANSWER that are missing from the current BACK (e.g. counts, sizes, specific ingredients, preparation details).
+3. Keep the tone and format consistent with the current BACK — short, factual, comma-separated details.
+4. Do NOT add the quiz question itself or any quiz framing. Just the factual content.
+5. If the current BACK already covers everything in the correct answer, return it unchanged.
+6. Keep it concise — no more than 2-3 sentences or a short list.
+
+Return ONLY the updated back text, no quotes, no preamble, no explanation.`
+
+  try {
+    return await callGemini([{ role: 'user', parts: [{ text: prompt }] }], {
+      maxOutputTokens: 512,
+      temperature: 0.2,
+    })
+  } catch (e) {
+    console.warn('[Reconcile] Failed for "' + front + '":', e.message)
+    return null
+  }
+}
+
+/**
+ * Reformat a flashcard's back text into a consistent bullet-point list.
+ * Each detail gets its own line with a • prefix.
+ * Returns the reformatted text, or null on failure.
+ */
+export async function reformatCardBackToBullets(front, currentBack) {
+  if (!front || !currentBack) return null
+
+  const prompt = `Task: Reformat this restaurant training flashcard's BACK text into a clean, consistent bullet-point list.
+
+FLASHCARD FRONT: "${front}"
+CURRENT BACK: "${currentBack}"
+
+RULES:
+1. Break the content into individual details, each on its own line starting with "• " (bullet character, not a dash).
+2. Each bullet should be ONE specific detail (ingredient, preparation method, side, size, count, etc.).
+3. Keep ALL existing information — do not remove, add, or change any facts.
+4. Keep wording close to the original — just restructure into bullets.
+5. If the back is ALREADY in bullet format with "• " on each line, return it unchanged.
+6. Do NOT add a title or header — just the bullet list.
+7. Combine closely related small details into one bullet when it reads naturally (e.g. "• Served with mashed potatoes and baked beans" rather than splitting into two bullets).
+
+Return ONLY the reformatted bullet-point text, no quotes, no preamble, no explanation.`
+
+  try {
+    return await callGemini([{ role: 'user', parts: [{ text: prompt }] }], {
+      maxOutputTokens: 512,
+      temperature: 0.1,
+    })
+  } catch (e) {
+    console.warn('[Reformat] Failed for "' + front + '":', e.message)
+    return null
+  }
+}
+
+/**
+ * Generate a single menu item flashcard using category-specific template.
+ * Returns { front, back } or null.
+ */
+export async function generateMenuItemFlashcard(itemName, description, price, category, subcategory, userNotes = '') {
+  const { buildFlashcardPrompt } = await import('../utils/flashcardCategoryTemplates')
+  const prompt = buildFlashcardPrompt(itemName, description, price, category, subcategory, userNotes)
+  try {
+    const raw = await callGemini([{ role: 'user', parts: [{ text: prompt }] }], {
+      maxOutputTokens: 800,
+      temperature: 0.2,
+    })
+    const cleaned = (typeof raw === 'string' ? raw : '')
+      .replace(/```(?:json)?\s*/gi, '')
+      .replace(/\s*```/g, '')
+      .trim()
+    const parsed = JSON.parse(cleaned)
+    if (parsed?.front && parsed?.back) return { front: parsed.front, back: parsed.back }
+    return null
+  } catch (e) {
+    console.warn('[FlashcardGen] Failed for "' + itemName + '":', e?.message)
+    return null
+  }
+}
+
+/**
  * Generate flashcards from pasted text or menu descriptions.
  */
 export async function generateFlashcards(sourceText, count = 10) {
@@ -124,26 +312,6 @@ Evidence: Cite specific strengths or consistent issues.
 
 Action: What should the manager focus on next?`
   return callGemini([{ role: 'user', parts: [{ text: prompt }] }], { maxOutputTokens: 512, temperature: 0.4 })
-}
-
-/**
- * Generate a short personalized coach tip for a trainee. Suggests opening the Help chat and typing "Quiz me" or "Upsell me" when relevant.
- */
-export async function getCoachTip(traineeSummary) {
-  const prompt = `You are a supportive restaurant training coach. Based on this trainee's summary, give a "Coach's Tip" (2-4 sentences). Be encouraging and specific.
-
-LOGIC:
-1. If they have failed tests or are new: Tell them to open the Help chat (?) and type "Quiz me" to practice.
-2. If they are passing but not yet certified: Suggest opening the Help chat and typing "Upsell me" to practice specific liquor brands and service.
-3. Otherwise: Give a general tip (e.g. "Full Hands In", or studying their Need Practice topics).
-
-Do not include STALLED_ALERT or any prefix. Reply with the coach tip only (plain text).`
-
-  const fullPrompt = `${prompt}
-
-Trainee summary:
-${(traineeSummary || '').slice(0, 2000)}`
-  return callGemini([{ role: 'user', parts: [{ text: fullPrompt }] }], { maxOutputTokens: 512, temperature: 0.5 })
 }
 
 /**
