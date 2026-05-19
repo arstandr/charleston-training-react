@@ -3,6 +3,7 @@ import { doc, getDoc, collection, getDocs, query, where, orderBy, limit, onSnaps
 import { db, app } from '../firebase'
 import FlashcardCleanupModal from '../components/FlashcardCleanupModal'
 import MedicTab from '../components/health/MedicTab'
+import TrainingImprovementTab from '../components/health/TrainingImprovementTab'
 
 const FUNCTIONS_BASE = 'https://us-central1-chartrain-20901.cloudfunctions.net'
 
@@ -959,6 +960,7 @@ export default function SystemHealthPage() {
             {[
               { key: 'heartbeat', label: '🫀 Heartbeat', icon: '🫀' },
               { key: 'medic', label: '🩺 Medic', icon: '🩺' },
+              { key: 'training', label: '🎓 Training Improvement', icon: '🎓' },
               { key: 'toast', label: '🍞 Toast', icon: '🍞' },
               { key: 'charlie', label: '💬 Charlie', icon: '💬' },
               { key: 'config', label: '⚙️ Config', icon: '⚙️' },
@@ -1753,6 +1755,14 @@ export default function SystemHealthPage() {
           <h1 className="text-2xl font-bold text-gray-900 mb-2">🩺 Medic</h1>
           <p className="text-gray-500 mb-6">What Medic did — the Activity Log + self-improvement scoreboard</p>
           <MedicTab currentUser={currentUser} />
+            </>
+          )}
+
+          {activeTab === 'training' && (
+            <>
+          <h1 className="text-2xl font-bold text-gray-900 mb-2">🎓 Training Improvement</h1>
+          <p className="text-gray-500 mb-6">Decision-ready proposals to improve the training program — you approve, edit, or reject</p>
+          <TrainingImprovementTab />
             </>
           )}
         </div>
