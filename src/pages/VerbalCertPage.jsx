@@ -89,6 +89,19 @@ export default function VerbalCertPage() {
     setSaveError('')
     try {
       const certifiedBy = currentUser.uid ?? currentUser.id
+      // Trainee doc first: it can fail on rules, and it throws if it does.
+      // Writing the immutable verbalCertifications record second means a
+      // failure here leaves no orphan pass record behind.
+      await closeOutCertification({
+        traineeId,
+        certifierEmpNum: currentUser.empNum || '',
+        certifierUid: certifiedBy,
+        outcome,
+        totalScore,
+        maxScore: TOTAL_POSSIBLE,
+        reviewNotes,
+        retrainAreas,
+      })
       await createVerbalCertification({
         traineeId,
         traineeName: traineeName || traineeId,
@@ -115,18 +128,6 @@ export default function VerbalCertPage() {
           phase4: phase4Scores,
           phase5: phase5Scores,
         },
-      })
-      // Records the outcome, signs the Certification shift so training reaches 6/6,
-      // and archives on a pass. Before this, the cert shift was never signed.
-      await closeOutCertification({
-        traineeId,
-        certifierEmpNum: currentUser.empNum || '',
-        certifierUid: certifiedBy,
-        outcome,
-        totalScore,
-        maxScore: TOTAL_POSSIBLE,
-        reviewNotes,
-        retrainAreas,
       })
       setSavedOk(true)
       setTimeout(() => navigate('/manager', { replace: true }), 1500)

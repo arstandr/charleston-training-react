@@ -67,6 +67,13 @@ export async function closeOutCertification({
     }
   }
 
-  await saveToFirestore('trainees', traineeId, payload)
+  // saveToFirestore swallows non-retryable errors and returns false rather than
+  // throwing. Without this check a permission-denied write would still show
+  // "certified successfully" and leave the trainee stuck at 5/6 — the exact
+  // limbo this flow exists to prevent.
+  const ok = await saveToFirestore('trainees', traineeId, payload)
+  if (!ok) {
+    throw new Error('Could not write the certification to the trainee record. Nothing was saved — try again.')
+  }
   return attempt
 }

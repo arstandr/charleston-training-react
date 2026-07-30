@@ -62,7 +62,18 @@ export default function CertificationReview({
   onSubmit,
 }) {
   const pct = maxScore ? Math.round((totalScore / maxScore) * 100) : 0
-  const canSubmit = phase1Passed !== null && attested && !saving
+
+  // Phases left at zero usually mean the certifier jumped straight to this tab
+  // rather than that the trainee scored nothing. Surfaced, not blocked —
+  // scoring is the manager's call.
+  const unscored = ['phase2', 'phase3', 'phase4', 'phase5']
+    .filter((p) => !scores[p])
+    .map((p) => `Phase ${p.slice(-1)}`)
+
+  // Certifying while the Training Review is explicitly marked Needs Improvement
+  // is a contradiction, not a judgement call — block that one combination.
+  const phase1Blocks = outcome === 'certified' && phase1Passed === false
+  const canSubmit = phase1Passed !== null && attested && !saving && !phase1Blocks
 
   const effects = useMemo(() => {
     if (outcome === 'certified') {
@@ -241,6 +252,20 @@ export default function CertificationReview({
           I certified this trainee in person and the scores above reflect their answers.
         </span>
       </label>
+
+      {phase1Blocks ? (
+        <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-800">
+          Phase 1 is marked <strong>Needs Improvement</strong>. Change it to Satisfactory, or record this as
+          “Needs more training”.
+        </div>
+      ) : null}
+
+      {outcome === 'certified' && unscored.length ? (
+        <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-900">
+          {unscored.join(', ')} {unscored.length === 1 ? 'has' : 'have'} no points recorded. Certifying now saves{' '}
+          {totalScore}/{maxScore} to {traineeName || 'this trainee'}&rsquo;s permanent record.
+        </div>
+      ) : null}
 
       {error ? (
         <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-800">{error}</div>
