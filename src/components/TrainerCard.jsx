@@ -32,6 +32,12 @@ export default memo(function TrainerCard({ trainer, onEdit, onFeedback, onClick,
   const [ratingsLoading, setRatingsLoading] = useState(true)
   const [showSchedule, setShowSchedule] = useState(false)
 
+  // A valid display number is numeric-only or a short code (1-6 digits).
+  // Toast GUIDs (uuid format) and Firestore auto-IDs (20-char alphanumeric) are never valid emp#s.
+  // This guard prevents doc IDs leaking into the display if the employeeNumber field is missing.
+  const isValidEmpNum = empNum && /^\d{1,6}$/.test(String(empNum).trim())
+  const displayEmpNum = isValidEmpNum ? empNum : null
+
   const trainerId = toastGuid || empNum
 
   useEffect(() => {
@@ -100,7 +106,9 @@ export default memo(function TrainerCard({ trainer, onEdit, onFeedback, onClick,
         </div>
         <div>
           <div className="font-bold text-gray-800">{name || 'Unnamed'}</div>
-          {empNum && <div className="text-xs text-gray-500">#{empNum}</div>}
+          <div className="text-xs text-gray-500">
+            {displayEmpNum ? `#${displayEmpNum}` : 'No #'}
+          </div>
         </div>
       </div>
       <div className="mb-3">

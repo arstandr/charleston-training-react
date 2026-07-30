@@ -1,6 +1,6 @@
 /**
  * Verbal Certification — question banks and point values per phase.
- * Phase 1 is pass/fail (no numeric score). Numeric total: 20 + 100 + 62 + 30 = 212
+ * Phase 1 is pass/fail (no numeric score). Numeric total: 20 + 100 + 53 + 30 = 203
  */
 
 export const PHASE1_TRAINING = {
@@ -69,7 +69,6 @@ export const PHASE3_FOOD_MENU = {
       title: 'Burgers & sandwiches',
       items: [
         'Cheeseburger',
-        'Hickory Burger',
         'Corned Beef',
         'Chicken Avocado Club',
         'Famous French Dip',
@@ -104,9 +103,9 @@ export const PHASE3_FOOD_MENU = {
   ],
 }
 
-/** Phase 4: each item has points; total 62 (10×2 + 14×3). */
+/** Phase 4: each item has points; total 50 (10×2 + 10×3). */
 export const PHASE4_BAR = {
-  maxScore: 62,
+  maxScore: 50,
   items: [
     { text: 'Name all draft beers', points: 2 },
     { text: 'Name all import beers', points: 2 },
@@ -119,19 +118,15 @@ export const PHASE4_BAR = {
     { text: 'Name 2 tequilas', points: 2 },
     { text: 'What is our sweetest white wine?', points: 2 },
     { text: 'What is our driest red wine?', points: 3 },
-    { text: 'Describe the Bourbon Sour', points: 3 },
     { text: 'Describe the Perfect Margarita', points: 3 },
-    { text: 'Describe the Bee\'s Knees', points: 3 },
-    { text: 'Describe the Blackberry Mule', points: 3 },
-    { text: 'How much wine do we pour per glass? (6 or 9 oz)', points: 3 },
+    { text: 'How much wine do we pour per glass?', points: 3 },
     { text: 'What do you ask when a guest orders a martini?', points: 3 },
     { text: 'What is the garnish for clear liquors with a clear mixer?', points: 3 },
     { text: 'Name 4 things to look for on an ID', points: 3 },
     { text: 'Name one after-dinner drink', points: 3 },
     { text: 'What kind of water do we serve?', points: 3 },
     { text: 'Describe the Peach Bellini', points: 3 },
-    { text: 'What sizes do we offer? (16 or 20 oz)', points: 3 },
-    { text: 'Describe the Signature Margarita', points: 3 },
+    { text: 'What sizes do we offer?', points: 3 },
   ],
 }
 
@@ -172,4 +167,4 @@ export const PHASE5_SERVICE = {
 }
 
 /** Total possible points (phases 2–5 only; Phase 1 is pass/fail). */
-export const TOTAL_POSSIBLE = 212
+export const TOTAL_POSSIBLE = 200

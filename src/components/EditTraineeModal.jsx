@@ -6,6 +6,7 @@ export default function EditTraineeModal({ open, trainee, stores = [], onSave, o
   const [name, setName] = useState('')
   const [employeeNumber, setEmployeeNumber] = useState('')
   const [store, setStore] = useState('')
+  const [archiveExempt, setArchiveExempt] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -13,6 +14,7 @@ export default function EditTraineeModal({ open, trainee, stores = [], onSave, o
       setName(trainee.name || '')
       setEmployeeNumber(String(trainee.employeeNumber ?? ''))
       setStore(trainee.store || (stores[0] || 'Westfield'))
+      setArchiveExempt(trainee.archiveExempt === true)
     }
   }, [trainee, stores])
 
@@ -28,7 +30,7 @@ export default function EditTraineeModal({ open, trainee, stores = [], onSave, o
       setError('Employee number must be 3–10 digits (numbers only).')
       return
     }
-    const newId = onSave(trainee?.id, { name: name.trim(), employeeNumber: emp, store: store || stores[0] || 'Westfield' })
+    const newId = onSave(trainee?.id, { name: name.trim(), employeeNumber: emp, store: store || stores[0] || 'Westfield', archiveExempt })
     if (newId != null) {
       onClose()
     } else {
@@ -90,6 +92,22 @@ export default function EditTraineeModal({ open, trainee, stores = [], onSave, o
                 <option key={s} value={s}>{getStoreDisplayName(s)}</option>
               ))}
             </select>
+          </div>
+          <div className="mb-4">
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-1 h-4 w-4 rounded border-gray-300"
+                checked={archiveExempt}
+                onChange={(e) => setArchiveExempt(e.target.checked)}
+              />
+              <span>
+                <span className="block text-sm font-medium text-gray-700">Keep on trainee list</span>
+                <span className="block text-xs text-gray-500">
+                  Don&apos;t auto-archive this trainee for Server shifts or inactivity. Completing certification still archives them.
+                </span>
+              </span>
+            </label>
           </div>
           {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
           <div className="flex gap-2">

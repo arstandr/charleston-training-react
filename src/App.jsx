@@ -70,35 +70,11 @@ class ErrorBoundary extends Component {
   componentDidCatch(error, errorInfo) {
     console.error('ErrorBoundary caught:', error, errorInfo)
     if (isChunkLoadError(error)) {
-      // Rate-limit the reload (max 1 per 30s) so a genuinely-unloadable chunk
-      // surfaces the fallback UI instead of an infinite reload loop. Mirrors
-      // the boot-guard's sessionStorage guard in index.html.
-      let canReload = true
-      try {
-        const last = parseInt(sessionStorage.getItem('ct_boot_reload_at') || '0', 10)
-        if (last && Date.now() - last < 30000) {
-          canReload = false
-        } else {
-          sessionStorage.setItem('ct_boot_reload_at', String(Date.now()))
-        }
-      } catch (_) {
-        // No sessionStorage — do not risk a reload loop.
-        canReload = false
-      }
-      if (canReload) {
-        window.location.reload()
-        return
-      }
-      // Reloaded too recently — fall through to the fallback UI + report it.
-      logClientError('general', 'chunk-load-reload-exhausted', error, {
-        componentStack: errorInfo?.componentStack?.substring(0, 500) || null,
-        source: 'capture_frontend',
-      })
+      window.location.reload()
       return
     }
     logClientError('general', 'react-render-crash', error, {
       componentStack: errorInfo?.componentStack?.substring(0, 500) || null,
-      source: 'capture_frontend',
     })
   }
   render() {
@@ -143,71 +119,35 @@ function ProtectedRoute({ children, allowedRoles }) {
 }
 
 const INSTALL_DISMISS_KEY = 'chartrain-pwa-install-dismissed'
-const APP_VERSION = '2026-03-25-v1'
 
+// Poll /version.json every 60s — auto-reload silently when a new build is deployed
 function useVersionCheck() {
-  const [updateAvailable, setUpdateAvailable] = useState(false)
-  const [updateMessage, setUpdateMessage] = useState('')
-
   useEffect(() => {
-    return subscribeToDoc('config', 'appVersion', (data) => {
-      if (!data) return
-      if (data.forceRefresh === true) {
-        window.location.reload(true)
-        return
-      }
-      const serverVersion = data.trainingAppVersion || ''
-      if (serverVersion && serverVersion !== APP_VERSION) {
-        setUpdateAvailable(true)
-        setUpdateMessage(data.trainingMessage || 'A new version is available. Please refresh.')
-      }
+    const myBuildAt = typeof __BUILD_AT__ !== 'undefined' ? __BUILD_AT__ : null
+    if (!myBuildAt) return
+
+    // Also watch Firestore forceRefresh for admin-triggered reloads
+    const unsub = subscribeToDoc('config', 'appVersion', (data) => {
+      if (data?.forceRefresh === true) window.location.reload(true)
     })
+
+    const check = async () => {
+      try {
+        const res = await fetch('/version.json?_=' + Date.now())
+        if (!res.ok) return
+        const { buildAt } = await res.json()
+        if (buildAt && buildAt !== myBuildAt) window.location.reload(true)
+      } catch (_) {}
+    }
+
+    const id = setInterval(check, 60_000)
+    return () => { clearInterval(id); unsub() }
   }, [])
-
-  return { updateAvailable, updateMessage }
-}
-
-function UpdateBanner({ message }) {
-  return (
-    <div style={{
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      zIndex: 99999,
-      background: 'linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)',
-      color: 'white',
-      padding: '20px',
-      textAlign: 'center',
-      boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
-    }}>
-      <div style={{ fontSize: '20px', fontWeight: 800, marginBottom: '8px' }}>⚠️ Update Available</div>
-      <div style={{ fontSize: '14px', marginBottom: '14px', opacity: 0.95 }}>{message}</div>
-      <button
-        type="button"
-        onClick={() => window.location.reload(true)}
-        style={{
-          background: 'white',
-          color: '#dc2626',
-          border: 'none',
-          padding: '14px 40px',
-          borderRadius: '12px',
-          fontSize: '17px',
-          fontWeight: 700,
-          cursor: 'pointer',
-          minWidth: '200px',
-        }}
-      >
-        🔄 Update Now
-      </button>
-    </div>
-  )
 }
 
 function VersionCheckBanner() {
-  const { updateAvailable, updateMessage } = useVersionCheck()
-  if (!updateAvailable) return null
-  return <UpdateBanner message={updateMessage} />
+  useVersionCheck()
+  return null
 }
 
 function PWABanners() {
@@ -312,7 +252,7 @@ function DashboardRedirect() {
 function AppRoutes() {
   return (
     <Routes>
-      <Route path="/login" element={<ErrorBoundary><LoginPage /></ErrorBoundary>} />
+      <Route path="/login" element={<LoginPage />} />
       <Route path="/dashboard" element={<DashboardRedirect />} />
       <Route path="/manager" element={
         <ProtectedRoute allowedRoles={['manager', 'admin', 'owner']}>

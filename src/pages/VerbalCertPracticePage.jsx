@@ -39,6 +39,7 @@ export default function VerbalCertPracticePage() {
   const [existingData, setExistingData] = useState(null)
   const [submitted, setSubmitted] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState(null)
 
   useEffect(() => {
     if (!traineeId) return
@@ -86,6 +87,7 @@ export default function VerbalCertPracticePage() {
       setSubmitted(true)
     } catch (e) {
       console.error('Failed to save practice:', e)
+      setSaveError('Failed to save — please try again.')
     } finally {
       setSaving(false)
     }
@@ -346,10 +348,11 @@ export default function VerbalCertPracticePage() {
                   {isReady && <span className="ml-3 text-green-700 font-bold">&#10003; Ready</span>}
                   {!isReady && totalPct > 0 && <span className="ml-3 text-amber-600 text-sm">Need {READINESS_THRESHOLD}%</span>}
                 </div>
+                {saveError && <p className="text-sm text-red-600 mb-1">{saveError}</p>}
                 <button
                   type="button"
                   className="btn"
-                  onClick={handleSubmit}
+                  onClick={() => { setSaveError(null); handleSubmit() }}
                   disabled={saving || totalScore === 0}
                 >
                   {saving ? 'Saving...' : 'Submit & save score'}

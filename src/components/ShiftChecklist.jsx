@@ -3,7 +3,13 @@ import { getShiftChecklistTemplate, TRAINING_MISSION_STATEMENT } from '../data/s
 
 /* Renders a SINGLE section of checklist items. Pagination is handled by parent (ShiftDetailView). */
 export default function ShiftChecklist({ shiftKey, section, items = {}, canEdit = false, onItemChange, onOpenExercise, isExerciseComplete, openExercise }) {
-  const [localValues, setLocalValues] = useState({})
+  const [localValues, setLocalValues] = useState(() => {
+    const init = {}
+    Object.entries(items).forEach(([id, entry]) => {
+      if (entry && typeof entry.value !== 'undefined') init[id] = entry.value
+    })
+    return init
+  })
 
   if (!section?.items?.length) return null
 

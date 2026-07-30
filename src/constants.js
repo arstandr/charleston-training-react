@@ -1,11 +1,6 @@
-export const STAFF_LOGINS = {
-  '1111': { role: 'manager', name: 'Ben', store: 'Castleton' },
-  '1234': { role: 'manager', name: 'Adam', store: 'Westfield' },
-  '7890': { role: 'trainer', name: 'Frank', store: 'Westfield' },
-  '1002': { role: 'trainer', name: 'Joe', store: 'Westfield' },
-  '3333': { role: 'trainer', name: 'Joe', store: 'Castleton' },
-  '6666': { role: 'trainer', name: 'Jim', store: 'Castleton' },
-}
+export const STAFF_LOGINS = {}
+// All staff accounts now flow from Toast → Firestore config/staffAccounts.
+// Use the Manager Dashboard "Sync from Toast" button to refresh.
 export const STORE_TO_TOAST_GUID = {
   Westfield: '86326c13-2905-455f-924a-a970ba974785',
   Castleton: 'b2965271-1d9f-4507-a427-0451c2e54cbf',

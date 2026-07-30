@@ -1463,7 +1463,7 @@ export default function QuizzesPage() {
                       <button
                         key={r}
                         type="button"
-                        className={`px-2.5 py-1 text-xs rounded-full border transition ${flagReason === r ? 'bg-red-600 text-white border-red-600' : 'bg-white text-red-700 border-red-300 hover:bg-red-100'}`}
+                        className={`px-2.5 py-2 min-h-[44px] text-xs rounded-full border transition ${flagReason === r ? 'bg-red-600 text-white border-red-600' : 'bg-white text-red-700 border-red-300 hover:bg-red-100'}`}
                         onClick={() => setFlagReason(r)}
                       >
                         {r}
@@ -1481,7 +1481,7 @@ export default function QuizzesPage() {
                   <div className="flex gap-2">
                     <button
                       type="button"
-                      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-50"
+                      className="px-3 py-2 min-h-[44px] text-xs font-medium rounded-lg bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-50"
                       onClick={() => handleFlagQuestion(flagReason)}
                       disabled={!flagReason.trim() || flagSubmitting}
                     >
@@ -1489,7 +1489,7 @@ export default function QuizzesPage() {
                     </button>
                     <button
                       type="button"
-                      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition"
+                      className="px-3 py-2 min-h-[44px] text-xs font-medium rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition"
                       onClick={() => { setFlagPromptOpen(false); setFlagReason('') }}
                     >
                       Cancel

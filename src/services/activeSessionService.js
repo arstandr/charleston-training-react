@@ -2,11 +2,11 @@
  * Cloud Function session tokens for trainees. No Firebase Auth.
  * Uses createTraineeSession, takeOverTraineeSession, heartbeatTraineeSession.
  */
-import { db } from '../firebase'
+import { app, db } from '../firebase'
 import { doc, onSnapshot } from 'firebase/firestore'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 
-const functions = getFunctions()
+const functions = getFunctions(app)
 
 export async function createSession(empNum) {
   const fn = httpsCallable(functions, 'createTraineeSession')
@@ -14,10 +14,16 @@ export async function createSession(empNum) {
   return result.data
 }
 
-export async function takeOverSession(traineeId) {
+export async function takeOverSession(traineeId, empNum) {
   const fn = httpsCallable(functions, 'takeOverTraineeSession')
-  const result = await fn({ traineeId })
+  const result = await fn({ traineeId, empNum })
   return result.data
+}
+
+export async function logoutSession(traineeId, sessionToken) {
+  if (!traineeId || !sessionToken) return
+  const fn = httpsCallable(functions, 'logoutTraineeSession')
+  await fn({ traineeId, sessionToken }).catch(() => {})
 }
 
 export async function heartbeat(traineeId, sessionToken) {
@@ -33,16 +39,13 @@ export function subscribeSession(traineeId, getCurrentSessionToken, onRevoked) {
     if (!snap.exists()) {
       const token = typeof getCurrentSessionToken === 'function' ? getCurrentSessionToken() : getCurrentSessionToken
       if (token) {
-        console.log('[Session] doc deleted → revoked')
         onRevoked()
       }
       return
     }
     const docToken = snap.data()?.sessionToken
     const ourToken = typeof getCurrentSessionToken === 'function' ? getCurrentSessionToken() : getCurrentSessionToken
-    console.log('[Session] snapshot fired. ourToken:', ourToken?.slice?.(0, 8), 'docToken:', docToken?.slice?.(0, 8))
     if (ourToken && docToken && docToken !== ourToken) {
-      console.log('[Session] token mismatch → revoked')
       onRevoked()
     }
   }, (err) => {

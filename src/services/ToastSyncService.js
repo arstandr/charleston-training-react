@@ -4,9 +4,17 @@
  * - syncTrainersFromToast: fetch employees + jobs, filter by "Trainer", upsert/archive in Firestore trainers collection.
  * - syncTrainerSchedules: fetch shifts for next 21 days, group by employee, cache in localStorage for Schedule Editor.
  */
-import { doc, setDoc } from 'firebase/firestore'
+import { doc, setDoc, collection, query, where, getDocs } from 'firebase/firestore'
 import { db } from '../firebase'
 import { STORE_TO_TOAST_GUID } from '../constants'
+import { logClientError } from './errorLogger'
+
+/**
+ * Allowed role values for staffAccounts entries.
+ * Any role written to staffAccounts that is not in this list is invalid and must be normalized.
+ * Exported so callers can reference the same contract.
+ */
+export const ALLOWED_ROLES = ['trainee', 'trainer', 'manager', 'admin', 'owner']
 
 const API_BASE = 'https://us-central1-chartrain-20901.cloudfunctions.net'
 const TOAST_TOKEN_KEY = 'toastAccessToken'
@@ -147,6 +155,28 @@ function dedupeEmployeesByName(list, label = 'Employee') {
 }
 
 /**
+ * Returns true if a non-archived trainees/ doc exists for this employee number.
+ * Used so a trainer who is also a trainee gets roles: ['trainer', 'trainee'] set
+ * on their staffAccounts entry, enabling the role picker at login.
+ * @param {string} empNum - employee number (externalEmployeeId)
+ * @returns {Promise<boolean>}
+ */
+async function hasActiveTraineeDoc(empNum) {
+  if (!empNum || !db) return false
+  try {
+    const q = query(
+      collection(db, 'trainees'),
+      where('employeeNumber', '==', empNum),
+      where('archived', '==', false)
+    )
+    const snap = await getDocs(q)
+    return !snap.empty
+  } catch (_) {
+    return false
+  }
+}
+
+/**
  * Sync trainers from Toast to Firestore + staffAccounts.
  * Fetches employees + jobs, keeps only "Trainer" job titles, upserts to trainers collection; archives those no longer in Toast list.
  * When currentStaffAccounts is provided, also archives staffAccounts trainer entries no longer in Toast.
@@ -199,10 +229,13 @@ export async function syncTrainersFromToast(restaurantGuid, storeName, currentSt
   // Toast is the source of truth: if Toast says they're active, our system says they're active.
   // Any local archive flag on a trainer Toast still has is overridden (un-archived).
   // Toast-side duplicates are handled upstream in dedupeEmployeesByName.
+  // Sync active status from Toast deleted flag to prevent auth bypass for terminated trainers.
   for (const t of trainers) {
     const guid = String(t.guid ?? '')
     if (!guid) continue
     const existing = byToastGuid[guid]
+    const isDeletedInToast = t.deleted === true
+    const active = !isDeletedInToast
     const payload = {
       firstName: t.firstName ?? '',
       lastName: t.lastName ?? '',
@@ -210,8 +243,12 @@ export async function syncTrainersFromToast(restaurantGuid, storeName, currentSt
       email: t.email ?? '',
       toastGuid: guid,
       locationGuid: restaurantGuid,
-      status: 'active',
-      archived: false,
+      status: active ? 'active' : 'archived',
+      archived: isDeletedInToast,
+      active,
+      // employeeNumber is the human-readable emp# (externalEmployeeId from Toast).
+      // Always written so trainer cards can display it regardless of doc ID shape.
+      employeeNumber: t.externalEmployeeId ?? '',
     }
     if (existing) {
       await setDoc(existing.ref, {
@@ -252,6 +289,10 @@ export async function syncTrainersFromToast(restaurantGuid, storeName, currentSt
 
   // Create/update staffAccounts entry for each active trainer.
   // Toast = truth: if Toast has them, our system has them. Archive flag overridden.
+  //
+  // Dual-role detection: if this trainer also has an active (non-archived) trainees/ doc,
+  // set roles: ['trainer', 'trainee'] so the role picker fires at login instead of routing
+  // them silently to the trainer dashboard with no training access.
   for (const t of trainers) {
     const empNum = t.externalEmployeeId
     if (!empNum) continue
@@ -261,10 +302,48 @@ export async function syncTrainersFromToast(restaurantGuid, storeName, currentSt
     // Don't demote admins/owners — those are role assignments, not Toast-derived
     if (existing && (existing.role === 'admin' || existing.role === 'owner')) continue
     const name = `${t.firstName} ${t.lastName}`.trim() || 'Trainer'
+
+    // Check if this trainer is also actively going through training.
+    // Only query when the entry is new or doesn't already carry the trainee role,
+    // so we avoid a Firestore read on every sync for already-wired entries.
+    const alreadyHasTraineeRole = (existing?.roles ?? []).includes('trainee')
+    const isAlsoTrainee = alreadyHasTraineeRole || await hasActiveTraineeDoc(empNum)
+
     if (existing) {
-      mergedAccounts[targetKey] = { ...existing, role: 'trainer', name, archived: false, toastGuid: t.guid }
+      let existingRole = existing.role
+      // Normalize invalid roles (e.g. legacy 'staff') before merging.
+      if (existingRole && !ALLOWED_ROLES.includes(existingRole)) {
+        const normalizedRole = isAlsoTrainee ? 'trainee' : 'trainer'
+        console.warn(`[ToastSync] Invalid role "${existingRole}" on entry #${targetKey} — normalizing to "${normalizedRole}"`)
+        logClientError('toastSync', 'invalid_role_normalized', new Error(`Invalid role: ${existingRole}`), { empNum: targetKey, oldRole: existingRole, normalizedRole })
+        existingRole = normalizedRole
+      }
+      const hasOtherRole = existingRole && existingRole !== 'trainer'
+      let updatedRoles
+      if (hasOtherRole) {
+        updatedRoles = [...new Set([...(existing.roles || [existingRole]), 'trainer'])]
+      } else if (isAlsoTrainee) {
+        updatedRoles = ['trainer', 'trainee']
+      } else {
+        updatedRoles = existing.roles
+      }
+      // Trainee-badge guard: if this person has an active trainee doc but is NOT in the Toast
+      // trainer list (isAlsoTrainee=true, we are in the trainer loop so they ARE a trainer —
+      // this guard applies to the role written, not the trainer filter). The badge rule:
+      // trainee badge + trainer badge → trainer; trainee badge + no trainer badge → trainee.
+      // Since we're in the trainer loop, they have the trainer badge — no demotion needed here.
+      mergedAccounts[targetKey] = {
+        ...existing,
+        role: (hasOtherRole && existingRole === 'manager') ? existingRole : 'trainer',
+        ...(updatedRoles?.length > 1 ? { roles: updatedRoles } : { roles: undefined }),
+        name, archived: false, toastGuid: t.guid,
+      }
     } else {
-      mergedAccounts[targetKey] = { role: 'trainer', name, store: storeName, archived: false, toastGuid: t.guid }
+      mergedAccounts[targetKey] = {
+        role: 'trainer',
+        ...(isAlsoTrainee ? { roles: ['trainer', 'trainee'] } : {}),
+        name, store: storeName, archived: false, toastGuid: t.guid,
+      }
     }
   }
 
@@ -403,10 +482,13 @@ export async function syncManagersFromToast(restaurantGuid, storeName, currentSt
 
   // Toast = truth: a current Manager / Key Hourly / Key Manager job code => active manager.
   // Local archive flag is overridden. Admin/owner role assignments are preserved.
+  // Sync active status from Toast deleted flag to prevent auth bypass for terminated employees.
   for (const m of managers) {
     const empNum = String(m.externalEmployeeId || '').trim()
     const guid = String(m.guid || '')
     const name = `${m.firstName} ${m.lastName}`.trim() || 'Manager'
+    const isDeletedInToast = m.deleted === true
+    const active = !isDeletedInToast
 
     // Resolve a stable key: an existing entry (by guid, then name), else the Toast Employee ID.
     // A brand-new manager whose Toast record has a blank Employee ID can't be keyed — skip
@@ -418,13 +500,29 @@ export async function syncManagersFromToast(restaurantGuid, storeName, currentSt
     if (existing && (existing.role === 'admin' || existing.role === 'owner')) continue
 
     if (existing) {
+      let existingRole = existing.role
+      // Normalize invalid roles (e.g. legacy 'staff') before merging.
+      if (existingRole && !ALLOWED_ROLES.includes(existingRole)) {
+        const normalizedRole = 'manager'
+        console.warn(`[ToastSync] Invalid role "${existingRole}" on entry #${targetKey} — normalizing to "${normalizedRole}"`)
+        logClientError('toastSync', 'invalid_role_normalized', new Error(`Invalid role: ${existingRole}`), { empNum: targetKey, oldRole: existingRole, normalizedRole })
+        existingRole = normalizedRole
+      }
+      const hasOtherRole = existingRole && existingRole !== 'manager'
+      const updatedRoles = hasOtherRole
+        ? [...new Set([...(existing.roles || [existingRole]), 'manager'])]
+        : existing.roles
       merged[targetKey] = {
-        ...existing, role: 'manager', name, store: existing.store || storeName,
+        ...existing,
+        role: 'manager',
+        ...(updatedRoles?.length > 1 ? { roles: updatedRoles } : { roles: undefined }),
+        name, store: existing.store || storeName,
         archived: false, toastGuid: existing.toastGuid || guid,
+        active,
       }
       updated++
     } else {
-      merged[targetKey] = { role: 'manager', name, store: storeName, archived: false, toastGuid: guid }
+      merged[targetKey] = { role: 'manager', name, store: storeName, archived: false, toastGuid: guid, active }
       createdNames.push(name)
       created++
     }

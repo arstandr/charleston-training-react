@@ -3,6 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { getFromFirestore } from '../utils/firestore'
 import { createVerbalCertification } from '../services/verbalCertService'
+import { closeOutCertification } from '../services/certSignOff'
+import CertificationReview from '../components/CertificationReview'
 import {
   PHASE1_TRAINING,
   PHASE2_LOCAL_OPTIONS,
@@ -34,6 +36,11 @@ export default function VerbalCertPage() {
   const [phase3Checked, setPhase3Checked] = useState({})
   const [phase4Scores, setPhase4Scores] = useState({})
   const [phase5Scores, setPhase5Scores] = useState({})
+  const [phase4Step, setPhase4Step] = useState(0)
+  const [reviewNotes, setReviewNotes] = useState('')
+  const [outcome, setOutcome] = useState('certified')
+  const [retrainAreas, setRetrainAreas] = useState([])
+  const [attested, setAttested] = useState(false)
 
   useEffect(() => {
     async function loadTrainee() {
@@ -44,7 +51,7 @@ export default function VerbalCertPage() {
       try {
         const result = await getFromFirestore('config', 'trainingData')
         const data = result || {}
-        const byId = data.trainees || data
+        const byId = data.data || data.trainees || data
         const trainee = typeof byId === 'object' && byId[traineeId] ? byId[traineeId] : null
         setTraineeName(trainee?.name || traineeId)
       } catch (_) {
@@ -56,7 +63,16 @@ export default function VerbalCertPage() {
     loadTrainee()
   }, [traineeId])
 
+  useEffect(() => {
+    if (activePhase === 4) setPhase4Step(0)
+  }, [activePhase])
+
   const totalScore = scores.phase2 + scores.phase3 + scores.phase4 + scores.phase5
+  const isReviewPhase = activePhase === 6
+
+  function handleContinue() {
+    setActivePhase((p) => Math.min(6, p + 1))
+  }
 
   async function handleCertify() {
     if (!traineeId || !currentUser) return
@@ -65,14 +81,23 @@ export default function VerbalCertPage() {
       setActivePhase(1)
       return
     }
+    if (!attested) {
+      setSaveError('Confirm you certified this trainee in person before signing.')
+      return
+    }
     setSaving(true)
     setSaveError('')
     try {
+      const certifiedBy = currentUser.uid ?? currentUser.id
       await createVerbalCertification({
         traineeId,
         traineeName: traineeName || traineeId,
-        certifiedBy: currentUser.uid ?? currentUser.id,
+        certifiedBy,
         certifiedByName: currentUser.name || currentUser.displayName || 'Manager',
+        certifiedByEmpNum: currentUser.empNum || '',
+        outcome,
+        reviewNotes: reviewNotes || '',
+        retrainAreas: outcome === 'certified' ? [] : retrainAreas,
         scores: {
           phase2: scores.phase2,
           phase3: scores.phase3,
@@ -91,6 +116,18 @@ export default function VerbalCertPage() {
           phase5: phase5Scores,
         },
       })
+      // Records the outcome, signs the Certification shift so training reaches 6/6,
+      // and archives on a pass. Before this, the cert shift was never signed.
+      await closeOutCertification({
+        traineeId,
+        certifierEmpNum: currentUser.empNum || '',
+        certifierUid: certifiedBy,
+        outcome,
+        totalScore,
+        maxScore: TOTAL_POSSIBLE,
+        reviewNotes,
+        retrainAreas,
+      })
       setSavedOk(true)
       setTimeout(() => navigate('/manager', { replace: true }), 1500)
     } catch (e) {
@@ -107,6 +144,7 @@ export default function VerbalCertPage() {
     { num: 3, title: 'Food Menu', max: PHASE3_FOOD_MENU.targetScore, score: scores.phase3 },
     { num: 4, title: 'Bar', max: PHASE4_BAR.maxScore, score: scores.phase4 },
     { num: 5, title: 'Service', max: PHASE5_SERVICE.maxScore, score: scores.phase5 },
+    { num: 6, title: 'Review', review: true },
   ]
 
   if (loading) {
@@ -121,7 +159,7 @@ export default function VerbalCertPage() {
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <header className="bg-green-800 text-white shadow">
         <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 min-w-0">
             <button
               type="button"
               onClick={() => navigate('/manager')}
@@ -131,7 +169,7 @@ export default function VerbalCertPage() {
             </button>
             <h1 className="text-xl font-bold">🎓 Verbal Certification</h1>
           </div>
-          <span className="text-green-200">{traineeName || traineeId}</span>
+          <span className="text-green-200 truncate max-w-[140px] sm:max-w-none">{traineeName || traineeId}</span>
         </div>
       </header>
 
@@ -142,13 +180,15 @@ export default function VerbalCertPage() {
               key={p.num}
               type="button"
               onClick={() => setActivePhase(p.num)}
-              className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+              className={`px-4 py-2 rounded-lg font-semibold transition-colors shrink-0 text-xs sm:text-sm ${
                 activePhase === p.num
                   ? 'bg-green-700 text-white'
                   : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600'
               }`}
             >
-              Phase {p.num}: {p.passFail ? (p.passed === true ? '✅' : p.passed === false ? '❌' : '—') : `${p.score}/${p.max}`}
+              {p.review
+                ? 'Review & sign-off'
+                : `Phase ${p.num}: ${p.passFail ? (p.passed === true ? '✅' : p.passed === false ? '❌' : '—') : `${p.score}/${p.max}`}`}
             </button>
           ))}
         </div>
@@ -281,30 +321,85 @@ export default function VerbalCertPage() {
         )}
 
         {activePhase === 4 && (
-          <div className="space-y-3">
+          <div className="space-y-4">
             <h2 className="text-lg font-bold text-gray-800 dark:text-white">Phase 4 — Bar</h2>
-            {PHASE4_BAR.items.map((item, idx) => (
-              <div key={idx} className="flex items-center gap-3 p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600">
-                <span className="text-sm text-gray-800 dark:text-gray-200 flex-1">{item.text} ({item.points} pts)</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={item.points}
-                  value={phase4Scores[idx] ?? ''}
-                  onChange={(e) => {
-                    const v = parseInt(e.target.value, 10)
-                    const val = isNaN(v) ? 0 : v
-                    setPhase4Scores((prev) => {
-                      const next = { ...prev, [idx]: val }
-                      const total = PHASE4_BAR.items.reduce((sum, it, i) => sum + (Number(next[i]) || 0), 0)
-                      setScores((s) => ({ ...s, phase4: total }))
-                      return next
-                    })
-                  }}
-                  className="w-16 px-2 py-1 border rounded"
+
+            {/* Progress indicator row */}
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-medium text-gray-600 dark:text-gray-400 shrink-0">
+                Item {phase4Step + 1} of {PHASE4_BAR.items.length}
+              </span>
+              <div className="flex-1 h-1.5 rounded-full bg-gray-200 dark:bg-gray-700">
+                <div
+                  className="h-1.5 rounded-full bg-green-600 transition-all"
+                  style={{ width: `${((phase4Step + 1) / PHASE4_BAR.items.length) * 100}%` }}
                 />
               </div>
-            ))}
+            </div>
+
+            {/* Current item card */}
+            {(() => {
+              const item = PHASE4_BAR.items[phase4Step]
+              return (
+                <div className="rounded-xl border-2 border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 p-5 shadow-sm">
+                  <p className="font-bold text-gray-800 dark:text-white mb-1">{item.text}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">Worth {item.points} pts</p>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="number"
+                      min={0}
+                      max={item.points}
+                      value={phase4Scores[phase4Step] ?? ''}
+                      onChange={(e) => {
+                        const v = parseInt(e.target.value, 10)
+                        const val = isNaN(v) ? 0 : v
+                        setPhase4Scores((prev) => {
+                          const next = { ...prev, [phase4Step]: val }
+                          const total = PHASE4_BAR.items.reduce((sum, it, i) => sum + (Number(next[i]) || 0), 0)
+                          setScores((s) => ({ ...s, phase4: total }))
+                          return next
+                        })
+                      }}
+                      className="w-20 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
+                    />
+                    <span className="text-sm text-gray-500 dark:text-gray-400">/ {item.points}</span>
+                  </div>
+                </div>
+              )
+            })()}
+
+            {/* Prev / Next nav row */}
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setPhase4Step((s) => Math.max(0, s - 1))}
+                disabled={phase4Step === 0}
+                className="flex-1 py-3 rounded-xl border border-gray-300 bg-white dark:bg-gray-800 font-semibold text-gray-700 dark:text-gray-200 disabled:opacity-40"
+              >
+                Prev
+              </button>
+              <button
+                type="button"
+                onClick={() => setPhase4Step((s) => Math.min(PHASE4_BAR.items.length - 1, s + 1))}
+                disabled={phase4Step === PHASE4_BAR.items.length - 1}
+                className="flex-1 py-3 rounded-xl bg-green-700 text-white font-semibold disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+
+            {/* Sticky Continue CTA — appears only when all Phase 4 items are scored */}
+            {PHASE4_BAR.items.every((_, i) => phase4Scores[i] !== undefined && String(phase4Scores[i]) !== '') && (
+              <div className="sticky bottom-4 z-10 mt-2">
+                <button
+                  type="button"
+                  onClick={handleContinue}
+                  className="w-full py-4 bg-green-700 text-white font-bold text-base rounded-xl shadow-lg shadow-green-900/30 hover:bg-green-800 active:bg-green-900 transition-colors"
+                >
+                  Continue to Phase 5 →
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -349,25 +444,59 @@ export default function VerbalCertPage() {
           </div>
         )}
 
+        {activePhase === 6 && (
+          <CertificationReview
+            traineeName={traineeName}
+            traineeId={traineeId}
+            store={currentUser?.store}
+            phaseMax={{
+              phase2: PHASE2_LOCAL_OPTIONS.maxScore,
+              phase3: PHASE3_FOOD_MENU.targetScore,
+              phase4: PHASE4_BAR.maxScore,
+              phase5: PHASE5_SERVICE.maxScore,
+            }}
+            scores={scores}
+            phase1Passed={phase1Passed}
+            phase1Notes={phase1Notes}
+            totalScore={totalScore}
+            maxScore={TOTAL_POSSIBLE}
+            reviewNotes={reviewNotes}
+            onReviewNotesChange={setReviewNotes}
+            outcome={outcome}
+            onOutcomeChange={setOutcome}
+            retrainAreas={retrainAreas}
+            onRetrainAreasChange={setRetrainAreas}
+            attested={attested}
+            onAttestedChange={setAttested}
+            certifierName={currentUser?.name || currentUser?.displayName || 'Manager'}
+            certifierEmpNum={currentUser?.empNum}
+            saving={saving}
+            error={saveError}
+            onSubmit={handleCertify}
+          />
+        )}
+
         <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700 space-y-3">
-          {saveError && (
+          {saveError && !isReviewPhase && (
             <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-800">
               {saveError}
             </div>
           )}
           {savedOk && (
             <div className="rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-800 font-medium">
-              ✅ Trainee certified successfully. Returning to dashboard…
+              {outcome === 'certified'
+                ? '✅ Trainee certified successfully. Returning to dashboard…'
+                : '✅ Review saved — trainee stays on the roster. Returning to dashboard…'}
             </div>
           )}
-          {!savedOk && (
+          {!savedOk && !isReviewPhase && (
             <button
               type="button"
-              onClick={handleCertify}
+              onClick={handleContinue}
               disabled={saving}
               className="px-8 py-3 bg-green-700 text-white font-bold rounded-xl hover:bg-green-800 disabled:opacity-50"
             >
-              {saving ? 'Saving…' : 'Certify Trainee'}
+              {activePhase === 5 ? 'Next: Review & sign-off →' : `Next: Phase ${activePhase + 1} →`}
             </button>
           )}
         </div>

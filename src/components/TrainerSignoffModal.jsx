@@ -14,7 +14,6 @@ export default function TrainerSignoffModal({
   shiftKey,
   shiftLabel,
   canSignOff = true,
-  failedTestTitles = [],
   onSave,
   onClose,
 }) {
@@ -62,9 +61,7 @@ export default function TrainerSignoffModal({
         </p>
         {!canSignOff && (
           <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-            {failedTestTitles.length > 0
-              ? `${traineeName || 'Trainee'} must pass the following test${failedTestTitles.length > 1 ? 's' : ''} before you can sign off: ${failedTestTitles.join(', ')}`
-              : 'Trainee must pass the required test(s) before you can sign off.'}
+            Trainee must pass the required test(s) and complete the checklist before you can sign off.
           </div>
         )}
         {canSignOff && (

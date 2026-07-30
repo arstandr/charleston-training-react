@@ -130,13 +130,11 @@ export function consolidateSizeVariants(items) {
       representative._sizeLabel = `Available in: ${sizeList}`
 
       consolidated.push(representative)
-      console.log(`🔗 Consolidated ${group.items.length} variants → "${group.baseName}" (${sizeList})`)
     } else {
       consolidated.push(...group.items)
     }
   }
 
-  console.log(`📦 Consolidation: ${items.length} items → ${consolidated.length} (merged ${items.length - consolidated.length} size variants)`)
   return consolidated
 }
 
@@ -165,12 +163,6 @@ export function processIncomingItems(toastItems, databaseItems, onImagePatch) {
         normalized: normalize(db?.name ?? db?.front ?? ''),
         matchesIncoming: normalize(db?.name ?? db?.front ?? '') === normIncoming,
       }))
-      console.log('📋 Stage 1 debug - First incoming item:', {
-        raw: name,
-        normalized: normIncoming,
-        dbSampleComparisons: dbNames,
-        dbListLength: dbList.length,
-      })
     }
 
     let matched = false
@@ -297,15 +289,11 @@ Reply ONLY with a JSON array, no markdown fences, no other text. Each element: {
 Example: [{"pendingIndex":0,"databaseName":"Hand-cut Filet"},{"pendingIndex":2,"databaseName":"House Salad"}]
 If no duplicates, reply: []`
 
-    console.log(`🔍 AI Semantic Scan - Processing batch ${batchStart}-${batchEnd - 1} of ${pendingItems.length}`)
-
     try {
       const response = await callGemini([{ role: 'user', parts: [{ text: prompt }] }], { maxOutputTokens: 4096, temperature: 0.2 })
       const rawText = (typeof response === 'string' ? response : response?.text ?? response?.candidates?.[0]?.content?.parts?.[0]?.text ?? '').trim()
 
       const cleaned = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim()
-
-      console.log('🔍 AI batch response (first 300 chars):', cleaned.slice(0, 300))
 
       const jsonMatch = cleaned.match(/\[[\s\S]*\]/)
       if (!jsonMatch) {
@@ -343,6 +331,5 @@ If no duplicates, reply: []`
     }
   }
 
-  console.log(`🔍 AI Semantic Scan complete: ${allDuplicatePairs.length} total duplicates found across all batches`)
   return { duplicatePairs: allDuplicatePairs }
 }

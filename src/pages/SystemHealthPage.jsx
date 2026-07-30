@@ -2,8 +2,6 @@ import { useState, useEffect } from 'react'
 import { doc, getDoc, collection, getDocs, query, where, orderBy, limit, onSnapshot, Timestamp, updateDoc, serverTimestamp, deleteDoc } from 'firebase/firestore'
 import { db, app } from '../firebase'
 import FlashcardCleanupModal from '../components/FlashcardCleanupModal'
-import MedicTab from '../components/health/MedicTab'
-import TrainingImprovementTab from '../components/health/TrainingImprovementTab'
 
 const FUNCTIONS_BASE = 'https://us-central1-chartrain-20901.cloudfunctions.net'
 
@@ -25,7 +23,7 @@ async function backfillCardCounts() {
   }
 }
 
-function FlashcardHealthCard({ reloadTrigger = 0, onRefresh }) {
+function FlashcardHealthCard({ reloadTrigger = 0, onRefresh, onToast }) {
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showCleanup, setShowCleanup] = useState(false)
@@ -139,11 +137,11 @@ function FlashcardHealthCard({ reloadTrigger = 0, onRefresh }) {
                 setBackfilling(true)
                 try {
                   await backfillCardCounts()
-                  alert('Card counts updated!')
+                  onToast?.('Card counts updated!', 'success')
                   onRefresh?.()
                 } catch (e) {
                   console.error('Backfill failed:', e)
-                  alert('Failed: ' + (e?.message || e))
+                  onToast?.('Failed: ' + (e?.message || e), 'error')
                 } finally {
                   setBackfilling(false)
                 }
@@ -220,6 +218,7 @@ export default function SystemHealthPage() {
   const [kbPage, setKbPage] = useState(0)
   const [toastSyncRunningById, setToastSyncRunningById] = useState({})
   const [hsScrapeLog, setHsScrapeLog] = useState(null)
+  const [sysToast, setSysToast] = useState(null)
   // Per-store scrape state: { scraping, progress, result }
   const [hsStoreState, setHsStoreState] = useState({ Castleton: { scraping: false, progress: 0, result: null }, Westfield: { scraping: false, progress: 0, result: null } })
 
@@ -519,10 +518,10 @@ export default function SystemHealthPage() {
       }
       setLiveErrors([])
       setRecentErrors([])
-      alert('Error feed cleared')
+      showSysToast('Error feed cleared')
     } catch (e) {
       console.error('Clear feed failed', e)
-      alert('Failed to clear: ' + (e?.message || e))
+      showSysToast('Failed to clear: ' + (e?.message || e), 'error')
     } finally {
       setClearFeedLoading(false)
     }
@@ -753,12 +752,12 @@ export default function SystemHealthPage() {
     try {
       const ok = await checkGeminiConfigured()
       if (ok) {
-        alert('✅ Gemini API is working!')
+        showSysToast('Gemini API is working!')
       } else {
-        alert('❌ Gemini API test failed. Check your API key and try again.')
+        showSysToast('Gemini API test failed. Check your API key and try again.', 'error')
       }
     } catch (error) {
-      alert('❌ Test failed:\n\n' + (error?.message || error))
+      showSysToast('Test failed: ' + (error?.message || error), 'error')
     }
   }
 
@@ -815,9 +814,19 @@ export default function SystemHealthPage() {
     )
   }
 
+  function showSysToast(msg, type = 'success') {
+    setSysToast({ msg, type })
+    setTimeout(() => setSysToast(null), 3500)
+  }
+
   return (
     <>
       <AppHeader />
+      {sysToast && (
+        <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-xl shadow-lg text-sm font-semibold text-white transition-all ${sysToast.type === 'error' ? 'bg-red-600' : sysToast.type === 'info' ? 'bg-blue-600' : 'bg-green-600'}`}>
+          {sysToast.msg}
+        </div>
+      )}
       <div className="min-h-screen bg-gray-50">
         <div className={`sticky top-0 z-30 px-4 py-3 text-white text-center font-semibold text-sm shadow-md ${
           pulseStatus === 'healthy' ? 'bg-green-600' :
@@ -959,8 +968,6 @@ export default function SystemHealthPage() {
           <div className="flex gap-1 mb-6 border-b border-gray-200">
             {[
               { key: 'heartbeat', label: '🫀 Heartbeat', icon: '🫀' },
-              { key: 'medic', label: '🩺 Medic', icon: '🩺' },
-              { key: 'training', label: '🎓 Training Improvement', icon: '🎓' },
               { key: 'toast', label: '🍞 Toast', icon: '🍞' },
               { key: 'charlie', label: '💬 Charlie', icon: '💬' },
               { key: 'config', label: '⚙️ Config', icon: '⚙️' },
@@ -1102,7 +1109,7 @@ export default function SystemHealthPage() {
                       <button
                         onClick={handleHsScrapeNow}
                         disabled={anyStoreScraping}
-                        className="px-4 py-2 rounded-lg text-sm font-semibold transition-all bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="px-4 py-2 min-h-[44px] rounded-lg text-sm font-semibold transition-all bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {anyStoreScraping ? '🔄 Scraping...' : '▶ Run Now'}
                       </button>
@@ -1531,7 +1538,7 @@ export default function SystemHealthPage() {
                               setEditedResponse('')
                               const stats = await getKnowledgeBaseStats()
                               setKbStats(stats)
-                              alert('Saved to knowledge base ✓')
+                              showSysToast('Saved to knowledge base')
                             }
                           }}
                           className="mt-1 text-xs px-2 py-1 bg-green-600 text-white rounded hover:bg-green-700"
@@ -1557,6 +1564,7 @@ export default function SystemHealthPage() {
                     handleAdminChatSend()
                   }
                 }}
+                aria-label="Ask Charlie"
                 placeholder="Ask Charlie..."
                 className="flex-1 p-3 border rounded-lg text-sm resize-y min-h-[44px]"
                 rows={1}
@@ -1659,7 +1667,7 @@ export default function SystemHealthPage() {
                     onClick={async () => {
                       await deleteDoc(doc(db, 'chatbotKnowledge', chunk.id))
                       setKbChunks(prev => prev.filter(c => c.id !== chunk.id))
-                      alert('Chunk deleted')
+                      showSysToast('Chunk deleted')
                     }}
                     className="mt-2 text-xs px-2 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200"
                   >
@@ -1718,6 +1726,7 @@ export default function SystemHealthPage() {
             <FlashcardHealthCard
               reloadTrigger={flashcardReloadTrigger}
               onRefresh={() => setFlashcardReloadTrigger((t) => t + 1)}
+              onToast={showSysToast}
             />
           </div>
 
@@ -1748,22 +1757,6 @@ export default function SystemHealthPage() {
             </div>
           </div>
           </>
-          )}
-
-          {activeTab === 'medic' && (
-            <>
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">🩺 Medic</h1>
-          <p className="text-gray-500 mb-6">What Medic did — the Activity Log + self-improvement scoreboard</p>
-          <MedicTab currentUser={currentUser} />
-            </>
-          )}
-
-          {activeTab === 'training' && (
-            <>
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">🎓 Training Improvement</h1>
-          <p className="text-gray-500 mb-6">Decision-ready proposals to improve the training program — you approve, edit, or reject</p>
-          <TrainingImprovementTab />
-            </>
           )}
         </div>
       </div>
@@ -1931,8 +1924,9 @@ function ToastConfigModal({ onClose }) {
         </p>
         <div className="space-y-3 mb-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Client ID</label>
+            <label htmlFor="toast-client-id" className="block text-sm font-medium text-gray-700 mb-1">Client ID</label>
             <input
+              id="toast-client-id"
               type="text"
               autoComplete="off"
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
@@ -1942,8 +1936,9 @@ function ToastConfigModal({ onClose }) {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Client Secret</label>
+            <label htmlFor="toast-client-secret" className="block text-sm font-medium text-gray-700 mb-1">Client Secret</label>
             <input
+              id="toast-client-secret"
               type="password"
               autoComplete="off"
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"

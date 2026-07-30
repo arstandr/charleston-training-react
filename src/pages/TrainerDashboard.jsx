@@ -34,7 +34,7 @@ const BROWSE_PAGE_SIZE = 30
 
 export default function TrainerDashboard() {
   const { currentUser } = useAuth()
-  const { trainingData, setTrainingData, saveTrainingData, listTrainees: listTraineesFn } = useTrainingData()
+  const { trainingData, setTrainingData, saveTrainingData, saveError, clearSaveError, listTrainees: listTraineesFn } = useTrainingData()
   const { staffAccounts } = useStaffAccounts()
   const { trainers, loadTrainersFromFirestoreForStore, lastSync } = useTrainers(currentUser?.store)
 
@@ -267,7 +267,6 @@ export default function TrainerDashboard() {
                       testsStatus: 'passed',
                       checklistComplete: isRequiredChecklistComplete(rec, shiftKey),
                       trainerSigned: false,
-                      failedTestTitles: [],
                     })
                 : undefined
             }
@@ -286,7 +285,6 @@ export default function TrainerDashboard() {
           shiftKey={signoffRow.shiftKey}
           shiftLabel={signoffRow.shiftLabel}
           canSignOff={signoffRow.testsStatus === 'passed' && !signoffRow.trainerSigned}
-          failedTestTitles={signoffRow.failedTestTitles || []}
           onSave={handleSaveSignoff}
           onClose={() => setSignoffRow(null)}
         />
@@ -328,6 +326,12 @@ export default function TrainerDashboard() {
       <AppHeader />
       <div className="container mx-auto max-w-4xl px-4 pb-8">
         <div className="content-area">
+          {saveError && (
+            <div className="mx-4 mt-2 p-3 bg-red-50 border border-red-300 rounded-lg flex items-center justify-between text-sm text-red-700">
+              <span>{saveError}</span>
+              <button onClick={clearSaveError} className="ml-3 text-red-500 hover:text-red-700 font-bold">✕</button>
+            </div>
+          )}
           <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="mb-2 text-xl font-bold text-gray-800">Trainer Dashboard</h2>
@@ -493,9 +497,15 @@ export default function TrainerDashboard() {
                   {!focusRow.trainerSigned && (
                     <button
                       type="button"
-                      className={`btn btn-small${focusRow.testsStatus !== 'passed' ? ' btn-secondary' : ''}`}
+                      className={`btn btn-small${!(focusRow.testsStatus === 'passed' && focusRow.checklistComplete) ? ' btn-secondary' : ''}`}
                       onClick={() => setSignoffRow(focusRow)}
-                      title={focusRow.testsStatus !== 'passed' ? 'Complete required tests first' : 'Rate & sign off'}
+                      title={
+                        focusRow.testsStatus !== 'passed'
+                          ? 'Complete required tests first'
+                          : !focusRow.checklistComplete
+                            ? 'Complete checklist first'
+                            : 'Rate & sign off'
+                      }
                     >
                       Rate &amp; Sign Off
                     </button>
@@ -690,6 +700,19 @@ export default function TrainerDashboard() {
                         <div>
                           <span className="font-medium text-gray-800">{t.name || t.id}</span>
                           <span className="ml-2 text-sm text-gray-500">#{t.employeeNumber || '—'}</span>
+                          {t.hireDate && (() => {
+                            try {
+                              const d = new Date(t.hireDate)
+                              if (!isNaN(d.getTime())) {
+                                return (
+                                  <span className="ml-2 text-xs text-gray-400">
+                                    Hired {d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                                  </span>
+                                )
+                              }
+                            } catch (_) {}
+                            return null
+                          })()}
                           {t.nextShift && (
                             <div className="mt-0.5 text-xs text-gray-500">
                               Next shift: {t.nextShift.label} · {formatWhenHuman(t.nextShift.when)}
@@ -746,7 +769,6 @@ export default function TrainerDashboard() {
           shiftKey={signoffRow.shiftKey}
           shiftLabel={signoffRow.shiftLabel}
           canSignOff={signoffRow.testsStatus === 'passed' && !signoffRow.trainerSigned}
-          failedTestTitles={signoffRow.failedTestTitles || []}
           onSave={handleSaveSignoff}
           onClose={() => setSignoffRow(null)}
         />

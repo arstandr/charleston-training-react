@@ -301,6 +301,7 @@ export default function OwnerDashboard() {
             </label>
             <input
               type="search"
+              aria-label="Search by name or employee number"
               placeholder="Search by name or #"
               className="rounded border border-gray-300 px-3 py-2 text-sm max-w-xs"
               value={ownerSearch}

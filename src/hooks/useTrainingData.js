@@ -1,7 +1,7 @@
-import { useState, useCallback, useEffect } from 'react'
-import { doc, onSnapshot, setDoc } from 'firebase/firestore'
+import { useState, useCallback, useEffect, useRef } from 'react'
+import { collection, doc, onSnapshot, writeBatch, deleteDoc, setDoc } from 'firebase/firestore'
 import { db } from '../firebase'
-import { ensureTrainingDataFromFirestore, saveToFirestore } from '../utils/firestore'
+import { ensureTrainingDataFromFirestore } from '../utils/firestore'
 import { normalizeVerbalCert } from '../utils/helpers'
 
 const TRAINING_DATA_KEY = 'trainingData'
@@ -14,6 +14,10 @@ function loadFromStorage() {
   } catch (_) {
     return {}
   }
+}
+
+function cacheLocally(data) {
+  try { localStorage.setItem(TRAINING_DATA_KEY, JSON.stringify(data)) } catch (_) {}
 }
 
 export function listTrainees(trainingData, { store = null, includeArchived = false } = {}) {
@@ -36,6 +40,10 @@ export function useTrainingData() {
   const [trainingDataFetchedAt, setTrainingDataFetchedAt] = useState(() => {
     try { return localStorage.getItem(TRAINING_DATA_FETCHED_AT_KEY) || null } catch (_) { return null }
   })
+  const [saveError, setSaveError] = useState(null)
+
+  // Tracks the state at last Firestore write — used by saveTrainingData diff logic
+  const lastSavedRef = useRef(null)
 
   const reload = useCallback(() => {
     setTrainingData(loadFromStorage())
@@ -48,68 +56,86 @@ export function useTrainingData() {
 
   useEffect(() => {
     if (!db) {
+      console.log('[TrainingData] db not ready, skipping listener setup')
       setTrainingDataLoading(false)
       return
     }
-    const ref = doc(db, 'config', 'trainingData')
+    console.log('[TrainingData] Setting up onSnapshot listener...')
+    const ref = collection(db, 'trainees')
     const unsub = onSnapshot(ref, async (snap) => {
-      if (!snap.exists()) {
-        setTrainingDataLoading(false)
-        return
-      }
-      const { data: dataKey, ...rest } = snap.data()
-      const remote = dataKey && typeof dataKey === 'object' ? dataKey : rest
-      if (typeof remote !== 'object') {
-        setTrainingDataLoading(false)
-        return
-      }
+      const remote = {}
+      snap.docs.forEach((d) => {
+        remote[d.id] = d.data()
+      })
+      console.log('[TrainingData] Loaded from Firestore:', Object.keys(remote).slice(0, 10), `(${Object.keys(remote).length} total)`)
+
       const now = new Date().toISOString()
-      try { localStorage.setItem(TRAINING_DATA_KEY, JSON.stringify(remote)) } catch (_) {}
+      cacheLocally(remote)
       try { localStorage.setItem(TRAINING_DATA_FETCHED_AT_KEY, now) } catch (_) {}
       setTrainingDataFetchedAt(now)
+      setTrainingData(remote)
+      lastSavedRef.current = remote
       setTrainingDataLoading(false)
-      const has7777 = Object.values(remote || {}).some((r) => r && String(r.employeeNumber || '').trim() === '7777')
-      if (!has7777) {
-        const data = { ...remote }
-        const id = 'T-Westfield-7777'
-        data[id] = {
-          id,
-          employeeNumber: '7777',
-          name: 'Demo Trainee',
-          store: 'Westfield',
-          schedule: {},
-          archived: false,
-        }
-        setTrainingData(data)
-        try { localStorage.setItem(TRAINING_DATA_KEY, JSON.stringify(data)) } catch (_) {}
-        try {
-          await saveToFirestore('config', 'trainingData', { data, updatedAt: now })
-        } catch (_) {}
-      } else {
-        setTrainingData(remote)
-      }
     }, (err) => {
-      console.warn('[TrainingData] onSnapshot error, falling back to one-time fetch:', err?.message)
+      console.error('[TrainingData] onSnapshot ERROR:', err?.code, err?.message)
+      console.log('[TrainingData] Falling back to one-time fetch...')
       ensureTrainingDataFromFirestore().then(() => {
-        setTrainingData(loadFromStorage())
+        const data = loadFromStorage()
+        console.log('[TrainingData] Fallback loaded:', Object.keys(data).length, 'documents')
+        setTrainingData(data)
+        setTrainingDataLoading(false)
+      }).catch(e => {
+        console.error('[TrainingData] Fallback also failed:', e?.message)
         setTrainingDataLoading(false)
       })
     })
     return () => unsub()
   }, [])
 
+  // Write only changed/added/deleted entries compared to last saved state
   const saveTrainingData = useCallback(async (data) => {
     const payload = data || trainingData
-    try {
-      localStorage.setItem(TRAINING_DATA_KEY, JSON.stringify(payload))
-    } catch (_) {}
+    cacheLocally(payload)
     setTrainingData(payload)
     if (!db) return
+
+    const prev = lastSavedRef.current || trainingData
+    const ops = []
+
+    for (const [id, rec] of Object.entries(payload)) {
+      if (!rec) continue
+      if (JSON.stringify(prev[id]) !== JSON.stringify(rec)) {
+        ops.push({ type: 'set', id, data: rec })
+      }
+    }
+    for (const id of Object.keys(prev)) {
+      if (!payload[id]) ops.push({ type: 'delete', id })
+    }
+
+    if (ops.length === 0) return
+
     try {
-      const toSave = JSON.parse(JSON.stringify({ data: payload, updatedAt: new Date().toISOString() }))
-      await saveToFirestore('config', 'trainingData', toSave)
+      if (ops.length === 1 && ops[0].type === 'delete') {
+        await deleteDoc(doc(db, 'trainees', ops[0].id))
+      } else if (ops.length === 1) {
+        await setDoc(doc(db, 'trainees', ops[0].id), ops[0].data, { merge: true })
+      } else {
+        // Batch writes (up to 500 — well within trainee count)
+        const batch = writeBatch(db)
+        for (const op of ops) {
+          if (op.type === 'delete') {
+            batch.delete(doc(db, 'trainees', op.id))
+          } else {
+            batch.set(doc(db, 'trainees', op.id), op.data, { merge: true })
+          }
+        }
+        await batch.commit()
+      }
+      lastSavedRef.current = payload
+      setSaveError(null)
     } catch (e) {
       console.error('[TrainingData] Firestore save FAILED:', e?.message, e?.code, e)
+      setSaveError("Changes couldn't be saved — please log out and back in.")
     }
   }, [trainingData])
 
@@ -173,31 +199,16 @@ export function useTrainingData() {
     if (!emp) return null
     const next = { ...trainingData }
     if (next[id]) return id
-    const entry = {
+    next[id] = {
       id,
       employeeNumber: emp,
-      empNum: emp,
       name: (name || '').trim() || `Trainee ${emp}`,
       store: store || 'Westfield',
       schedule: {},
       archived: false,
     }
-    next[id] = entry
     setTrainingData(next)
     saveTrainingData(next)
-    // Also write to trainees/{empNum} as an independent fallback so login always works
-    // even if the config/trainingData write fails or is delayed
-    if (db) {
-      setDoc(doc(db, 'trainees', emp), {
-        empNum: emp,
-        employeeNumber: emp,
-        name: entry.name,
-        store: entry.store,
-        archived: false,
-        traineeId: id,
-        updatedAt: new Date().toISOString(),
-      }, { merge: true }).catch((e) => console.warn('[TrainingData] trainees fallback write failed:', e?.message))
-    }
     return id
   }, [trainingData, saveTrainingData])
 
@@ -212,19 +223,21 @@ export function useTrainingData() {
     saveTrainingData(next)
   }, [trainingData, saveTrainingData])
 
-  const updateTrainee = useCallback((oldId, { name, employeeNumber, store: newStore }) => {
+  const updateTrainee = useCallback((oldId, { name, employeeNumber, store: newStore, archiveExempt }) => {
     const rec = trainingData[oldId]
     if (!rec) return null
     const emp = String(employeeNumber ?? rec.employeeNumber ?? '').trim()
     const store = newStore ?? rec.store ?? 'Westfield'
+    // archiveExempt only changes when explicitly passed as a boolean (manager toggle in EditTraineeModal)
+    const exemptPatch = typeof archiveExempt === 'boolean' ? { archiveExempt } : {}
     const newId = `T-${store}-${emp}`
     const next = { ...trainingData }
     if (newId !== oldId) {
       if (next[newId]) return null
-      next[newId] = { ...rec, id: newId, employeeNumber: emp, name: (name ?? rec.name ?? '').trim() || `Trainee ${emp}`, store }
+      next[newId] = { ...rec, id: newId, employeeNumber: emp, name: (name ?? rec.name ?? '').trim() || `Trainee ${emp}`, store, ...exemptPatch }
       delete next[oldId]
     } else {
-      next[oldId] = { ...rec, name: (name ?? rec.name ?? '').trim() || rec.name, employeeNumber: emp, store }
+      next[oldId] = { ...rec, name: (name ?? rec.name ?? '').trim() || rec.name, employeeNumber: emp, store, ...exemptPatch }
     }
     setTrainingData(next)
     saveTrainingData(next)
@@ -261,6 +274,8 @@ export function useTrainingData() {
     reload,
     refreshFromFirestore,
     saveTrainingData,
+    saveError,
+    clearSaveError: () => setSaveError(null),
     listTrainees: (opts) => listTrainees(trainingData, opts),
     archiveTrainee,
     terminateTrainee,

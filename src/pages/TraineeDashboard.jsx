@@ -1,5 +1,7 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { doc, updateDoc } from 'firebase/firestore'
+import { db } from '../firebase'
 
 const PRACTICE_SESSION_KEY = 'practiceTestSession'
 import { useAuth } from '../contexts/AuthContext'
@@ -15,6 +17,7 @@ import { useStaffAccounts } from '../hooks/useStaffAccounts'
 import { useToastStoreGuids } from '../hooks/useToastStoreGuids'
 import { useTestAttempts } from '../hooks/useTestAttempts'
 import { getTrainersByLocation } from '../services/trainerService'
+import { submitTrainerRating, updateTrainerRating, getExistingRating } from '../services/trainerRatingsService'
 import { useFlashcardMastery } from '../hooks/useFlashcardMastery'
 import { REQUIRED_SHIFT_KEYS, SHIFT_META, getStoreDisplayName } from '../constants'
 import { getAllFlashcardSets } from '../services/flashcardService'
@@ -31,12 +34,13 @@ import WeaknessPracticePanel from '../components/WeaknessPracticePanel'
 import TestReadinessPanel from '../components/TestReadinessPanel'
 import { getPendingChecks } from '../services/postShiftCheckService'
 import { getVerbalCertPractice } from '../services/verbalCertPracticeService'
+import { logClientError } from '../services/errorLogger'
 
 const SHIFT_ORDER = ['follow', 'rev1', 'rev2', 'rev3', 'rev4', 'foodrun', 'cert']
 
 export default function TraineeDashboard() {
   const navigate = useNavigate()
-  const { currentUser } = useAuth()
+  const { currentUser, loading } = useAuth()
   const traineeId = currentUser?.traineeId || currentUser?.id
   const { trainingData, setTrainingData, saveTrainingData, trainingDataLoading, trainingDataFetchedAt } = useTrainingData()
   const { staffAccounts } = useStaffAccounts()
@@ -115,6 +119,21 @@ export default function TraineeDashboard() {
     ...staffAccounts,
   }), [staffAccounts, firestoreTrainerMap])
 
+  // Fire exactly once when the "no training record" state is entered so Sentinel can detect it.
+  const noRecordLoggedRef = useRef(false)
+  useEffect(() => {
+    if (!traineeId || trainingDataLoading || loading) return
+    if (rec) { noRecordLoggedRef.current = false; return }
+    if (noRecordLoggedRef.current) return
+    noRecordLoggedRef.current = true
+    logClientError(
+      'training',
+      'no_training_record',
+      new Error('trainee dashboard found no record'),
+      { traineeId, empNum: currentUser?.empNum, hasTrainingData: !!trainingData }
+    )
+  }, [traineeId, rec, trainingDataLoading, loading, currentUser?.empNum, trainingData])
+
   const nextShift = rec ? getNextShift(rec, combinedStaffAccounts, SHIFT_ORDER) : null
   const progress = rec ? getCertificationProgress(rec) : { done: 0, total: 6, pct: 0 }
   const incompleteShifts = SHIFT_ORDER.filter((key) => {
@@ -125,6 +144,17 @@ export default function TraineeDashboard() {
   })
   const shiftsRatable = SHIFT_ORDER.filter((key) => rec?.schedule?.[key]?.trainerSignedAt && rec?.schedule?.[key]?.trainer)
   const trainerRatings = rec?.trainerRatings || {}
+
+  // Most recently signed-off shift with a trainer that hasn't been rated yet — blocks login
+  const mandatoryRatingShift = useMemo(() => {
+    if (!rec) return null
+    const unrated = SHIFT_ORDER.filter(
+      (key) => key !== 'follow' && rec.schedule?.[key]?.trainerSignedAt && rec.schedule?.[key]?.trainer && !trainerRatings[key]
+    )
+    if (!unrated.length) return null
+    unrated.sort((a, b) => new Date(rec.schedule[b].trainerSignedAt) - new Date(rec.schedule[a].trainerSignedAt))
+    return unrated[0]
+  }, [rec, trainerRatings])
 
   const resumePracticeTest = useMemo(() => {
     if (!traineeId) return null
@@ -137,15 +167,97 @@ export default function TraineeDashboard() {
     return null
   }, [traineeId])
 
-  const handleSaveRating = (shiftKey, payload) => {
+  const resumeOfficialTest = useMemo(() => {
+    if (!traineeId) return null
+    try {
+      const raw = localStorage.getItem(`officialTestSession_${traineeId}`)
+      if (!raw) return null
+      const s = JSON.parse(raw)
+      if (s?.testId && s?.mode === 'official') return { testId: s.testId, testTitle: s.testTitle || 'Test' }
+    } catch (_) {}
+    return null
+  }, [traineeId])
+
+  const waitingForResetTests = useMemo(() => {
+    if (!rec || !testAttempts) return []
+    const locked = []
+    for (const shiftKey of REQUIRED_SHIFT_KEYS) {
+      const testIds = getShiftRequiredTestIds(shiftKey, traineeId)
+      for (const testId of testIds) {
+        const { passed, count, maxAttempts } = testAttempts.getAttempts(testId)
+        if (!passed && count >= (maxAttempts || 3)) {
+          // Avoid duplicates — same testId can appear in multiple shifts
+          if (!locked.find((x) => x.testId === testId)) {
+            const shiftMeta = SHIFT_META[shiftKey] || { label: shiftKey }
+            locked.push({ testId, label: shiftMeta.label })
+          }
+        }
+      }
+    }
+    return locked
+  }, [rec, testAttempts, traineeId])
+
+  const needsVerbalCert = useMemo(() => {
+    if (!rec || !testAttempts) return false
+    if (rec?.verbalCertCompletedAt) return false
+    const allTestIds = []
+    for (const shiftKey of REQUIRED_SHIFT_KEYS) {
+      const ids = getShiftRequiredTestIds(shiftKey, traineeId)
+      for (const id of ids) {
+        if (!allTestIds.includes(id)) allTestIds.push(id)
+      }
+    }
+    if (allTestIds.length === 0) return false
+    return allTestIds.every((testId) => testAttempts.getAttempts(testId).passed)
+  }, [rec, testAttempts, traineeId])
+
+  const certificationComplete = !!rec?.verbalCertCompletedAt
+
+  const handleSaveRating = async (shiftKey, payload) => {
     if (!traineeId || !rec) return
     const next = { ...trainingData }
     if (!next[traineeId]) next[traineeId] = { ...rec }
     if (!next[traineeId].trainerRatings) next[traineeId].trainerRatings = {}
     next[traineeId].trainerRatings[shiftKey] = payload
     setTrainingData(next)
-    saveTrainingData(next)
+    // Write only the trainerRatings field — saveTrainingData writes the full record
+    // which trainees don't have permission to do (trainers/managers/owners only)
+    try {
+      await updateDoc(doc(db, 'trainees', traineeId), { [`trainerRatings.${shiftKey}`]: payload })
+    } catch (e) {
+      console.error('[TraineeDashboard] Failed to persist trainer rating to trainee record:', e?.message)
+    }
     setRatingModal({ open: false, shiftKey: null })
+
+    // Write to trainerRatings collection so manager views can see this rating
+    try {
+      const trainerEmpNum = String(payload.trainerId || rec.schedule[shiftKey]?.trainer || '')
+      const trainerId = staffAccounts?.[trainerEmpNum]?.toastGuid || trainerEmpNum
+      const scores = Array.isArray(payload.scores) ? payload.scores : []
+      const average = scores.length > 0
+        ? parseFloat((scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(2))
+        : 0
+      const ratingData = {
+        trainerId,
+        trainerEmpNum,
+        traineeId,
+        traineeName: rec.name || '',
+        shiftId: shiftKey,
+        shiftType: payload.shiftLabel || SHIFT_META[shiftKey]?.label || shiftKey,
+        scores,
+        average,
+        notes: payload.notes || '',
+        ratedAt: payload.at || new Date().toISOString(),
+      }
+      const existing = await getExistingRating(shiftKey, traineeId)
+      if (existing) {
+        await updateTrainerRating(existing.id, ratingData)
+      } else {
+        await submitTrainerRating(ratingData)
+      }
+    } catch (err) {
+      console.error('[TraineeDashboard] Failed to write trainer rating:', err)
+    }
   }
 
   if (!traineeId) {
@@ -159,17 +271,36 @@ export default function TraineeDashboard() {
     )
   }
 
-  if (!rec) {
+  if (!rec && !trainingDataLoading && !loading && traineeId) {
     return (
       <>
         <AppHeader />
         <div className="container mx-auto max-w-4xl p-4">
           <div className="content-area rounded-xl border border-gray-200 bg-gray-50 p-6 text-center">
-            <p className="text-gray-600 mb-2">No training record found.</p>
-            <p className="text-sm text-gray-500">Ask your manager to add you as a trainee from the Manager dashboard.</p>
+            <p className="text-gray-600 mb-2">No training record found for {traineeId}.</p>
+            <p className="text-sm text-gray-500 mb-1">Ask your manager to add you as a trainee from the Manager dashboard.</p>
+            <p className="text-xs text-gray-400">Show this screen to your manager: ID {traineeId}{currentUser?.empNum ? `, emp #${currentUser.empNum}` : ''}.</p>
           </div>
         </div>
       </>
+    )
+  }
+
+  if (mandatoryRatingShift) {
+    return (
+      <TrainerRatingModal
+        open={true}
+        mandatory={true}
+        fullPage={true}
+        traineeId={traineeId}
+        shiftKey={mandatoryRatingShift}
+        shiftLabel={SHIFT_META[mandatoryRatingShift]?.label || mandatoryRatingShift}
+        trainerId={rec.schedule[mandatoryRatingShift]?.trainer}
+        trainerName={combinedStaffAccounts[rec.schedule[mandatoryRatingShift]?.trainer]?.name || rec.schedule[mandatoryRatingShift]?.trainer}
+        existingRating={trainerRatings[mandatoryRatingShift]}
+        onSave={(payload) => handleSaveRating(mandatoryRatingShift, payload)}
+        onClose={() => {}}
+      />
     )
   }
 
@@ -221,7 +352,80 @@ export default function TraineeDashboard() {
             )
           })()}
 
+          {/* State banners: Test In-Progress, Waiting for Reset, Needs Verbal Cert */}
+          {resumeOfficialTest != null && (
+            <div className="rounded-xl border-2 border-amber-400 bg-amber-50 p-4 shadow-sm mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="font-bold text-amber-900">Test in progress</div>
+                <div className="text-sm text-amber-800">{resumeOfficialTest.testTitle}</div>
+                <div className="text-sm text-amber-700">You have an unfinished official attempt. Resume to submit.</div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-small bg-amber-500 border-amber-500 text-white hover:bg-amber-600 hover:border-amber-600"
+                onClick={() => navigate(`/quizzes?test=${encodeURIComponent(resumeOfficialTest.testId)}&mode=official`)}
+              >
+                Resume test
+              </button>
+            </div>
+          )}
+
+          {waitingForResetTests.length > 0 && (
+            <div className="rounded-xl border-2 border-red-400 bg-red-50 p-4 shadow-sm mb-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex-1">
+                  <div className="font-bold text-red-900">Test locked — manager reset required</div>
+                  <div className="mt-1 text-sm text-red-700">You&apos;ve used all your attempts. Ask your manager to unlock the test.</div>
+                  <div className="mt-2 space-y-1">
+                    {waitingForResetTests.map((t) => (
+                      <div key={t.testId} className="text-sm text-red-800">{t.label}</div>
+                    ))}
+                  </div>
+                </div>
+                <span className="text-xs font-bold text-red-700 bg-red-100 rounded-full px-3 py-1 self-start">Waiting for manager</span>
+              </div>
+            </div>
+          )}
+
+          {needsVerbalCert && (
+            <div className="rounded-xl border-2 border-green-500 bg-green-50 p-4 shadow-sm mb-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-bold text-green-900">Written tests complete!</span>
+                <span className="text-xs font-bold bg-green-600 text-white rounded-full px-3 py-1">Ready for verbal cert</span>
+              </div>
+              <p className="text-sm text-green-800 mt-1">All your written tests are passed. Your next step is the verbal certification with your manager.</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn btn-small bg-green-600 border-green-600 text-white hover:bg-green-700 hover:border-green-700"
+                  onClick={() => navigate('/flashcards?set=verbal_cert')}
+                >
+                  Study for verbal cert
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-small btn-secondary"
+                  onClick={() => setVerbalChecklistOpen(true)}
+                >
+                  View checklist
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* What's Next */}
+          {certificationComplete ? (
+            <section className="rounded-xl border-2 border-green-500 bg-gradient-to-br from-green-50 to-emerald-50 p-6 shadow-sm text-center mb-6">
+              <div className="w-16 h-16 rounded-full bg-green-600 flex items-center justify-center text-white text-3xl mx-auto">&#10003;</div>
+              <div className="text-xl font-bold text-green-900 text-center mt-3">Certification Complete!</div>
+              <div className="text-sm text-green-800 text-center mt-1">Congratulations, you&apos;re certified as a Charleston&apos;s server.</div>
+              {rec.verbalCertCompletedAt && (
+                <div className="text-xs text-green-700 text-center mt-1">
+                  Certified on {new Date(rec.verbalCertCompletedAt).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}
+                </div>
+              )}
+            </section>
+          ) : (
           <section className="mb-6 rounded-xl border-2 border-[var(--color-primary)] bg-green-50/50 p-4 shadow-sm">
             <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-[var(--color-primary)]">What&apos;s next</h3>
             {nextShift ? (
@@ -290,6 +494,7 @@ export default function TraineeDashboard() {
               <p className="text-gray-600">No upcoming shifts. All required shifts are complete or not yet scheduled.</p>
             )}
           </section>
+          )}
 
           {/* Post-shift knowledge check banners */}
           {pendingChecks.length > 0 && (

@@ -398,7 +398,7 @@ export const rev3Sections = {
   day: 'Day 5',
   subtitle:
     'Sign off shift - Trainee should be able to run the section (2 tables minimum) from start to finish with little assistance from the Trainer. Trainer should be there to help if needed, but mostly just a shadow to the Trainee.',
-  test: null,
+  test: 'Wine 101',
   sections: [
     { ...UNIFORM_SECTION },
     {
@@ -479,7 +479,7 @@ export const rev3Sections = {
         },
         {
           question: 'A B C stands for what in upselling?',
-          answer: 'Avocado, Anchovies, Bacon, Blue Cheese Crumbles, Cheese',
+          answer: "Angel's Envy, Basil Hayden, Woodford — premium bourbon upsells",
         },
         {
           question: 'When featuring, best way to increase sales?',

@@ -12,7 +12,7 @@ export async function uploadFileToStorage(file, itemId) {
   const ext = file.type === 'image/png' ? 'png' : file.type === 'image/webp' ? 'webp' : 'jpg'
   const safeName = (file.name || 'image').replace(/^.*[/\\]/, '').replace(/[^a-zA-Z0-9._-]/g, '_') || 'image'
   const timestamp = Date.now()
-  const filename = `${timestamp}_${safeName}`
+  let filename = `${timestamp}_${safeName}`
   if (!filename.endsWith(`.${ext}`) && !safeName.includes('.')) {
     filename = `${timestamp}_${safeName}.${ext}`
   }

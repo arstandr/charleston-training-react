@@ -15,7 +15,7 @@ export default function TrainerShiftRow({ row, onOpenDetail, onRateSignOff, heal
   } = row
   const whenStr = when ? formatWhenHuman(when) : '—'
   const testsOk = testsStatus === 'passed'
-  const canSignOff = testsOk && !trainerSigned
+  const canSignOff = testsOk && checklistComplete && !trainerSigned
   const blockers = []
   if (!testsOk && failedTestTitles?.length) blockers.push(...failedTestTitles.map((t) => `Needs: ${t}`))
   if (!checklistComplete) {
@@ -97,7 +97,13 @@ export default function TrainerShiftRow({ row, onOpenDetail, onRateSignOff, heal
             type="button"
             className={`btn btn-small${!canSignOff ? ' btn-secondary' : ''}`}
             onClick={() => onRateSignOff(row)}
-            title={!canSignOff ? 'Complete required tests first' : 'Rate & sign off'}
+            title={
+              !canSignOff
+                ? !testsOk
+                  ? 'Complete required tests first'
+                  : 'Complete checklist first'
+                : 'Rate & sign off'
+            }
           >
             Rate &amp; Sign Off
           </button>

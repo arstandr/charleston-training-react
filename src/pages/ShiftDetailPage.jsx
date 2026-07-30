@@ -103,7 +103,7 @@ export default function ShiftDetailPage() {
       const shiftData = await getShift(shiftId)
 
       if (!shiftData) {
-        alert('Shift not found')
+        showToast('Shift not found', 'error')
         navigate(role === 'manager' ? '/manager' : '/training', { replace: true })
         return
       }
@@ -152,7 +152,7 @@ export default function ShiftDetailPage() {
       }
     } catch (error) {
       console.error('Error loading shift:', error)
-      alert('Failed to load shift data')
+      showToast('Failed to load shift data', 'error')
     } finally {
       setLoading(false)
     }
@@ -227,11 +227,11 @@ export default function ShiftDetailPage() {
 
   async function completeShift() {
     if (!readinessScores.knowledge || !readinessScores.execution || !readinessScores.confidence) {
-      alert('Please complete the Trainee Readiness scoring before signing off')
+      showToast('Please complete the Trainee Readiness scoring before signing off', 'error')
       return
     }
     if (!feedback.strengths?.trim() || !feedback.opportunities?.trim() || !feedback.goal1?.trim() || !feedback.goal2?.trim() || !feedback.goal3?.trim()) {
-      alert('Please complete all feedback sections before signing off')
+      showToast('Please complete all feedback sections before signing off', 'error')
       return
     }
     try {
@@ -283,11 +283,11 @@ export default function ShiftDetailPage() {
       if (shift?.traineeId && shiftKey) {
         createPostShiftCheck(shift.traineeId, shiftKey).catch(() => {})
       }
-      alert('Shift completed and signed off')
+      showToast('Shift completed and signed off')
       navigate(role === 'manager' ? '/manager' : '/training', { replace: true })
     } catch (error) {
       console.error('Error completing shift:', error)
-      alert('Failed to complete shift: ' + (error?.message || error))
+      showToast('Failed to complete shift: ' + (error?.message || error), 'error')
     } finally {
       setSaving(false)
     }
@@ -646,7 +646,7 @@ export default function ShiftDetailPage() {
                   type="button"
                   disabled={sectionIdx === 0}
                   onClick={() => setSectionIdx((i) => Math.max(0, i - 1))}
-                  className="px-3 py-1.5 sm:px-5 sm:py-2.5 sm:text-base text-sm font-semibold rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 disabled:opacity-30 transition-all active:scale-95"
+                  className="px-3 py-2.5 sm:px-5 sm:py-2.5 sm:text-base text-sm font-semibold rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 disabled:opacity-30 transition-all active:scale-95 min-h-[44px]"
                 >
                   ← Prev
                 </button>
@@ -656,22 +656,24 @@ export default function ShiftDetailPage() {
                       key={s.key}
                       type="button"
                       onClick={() => setSectionIdx(i)}
-                      className={`rounded-full transition-all ${
+                      className="flex items-center justify-center w-[44px] h-[44px]"
+                      aria-label={`Section ${i + 1}`}
+                    >
+                      <span className={`rounded-full transition-all pointer-events-none ${
                         i === sectionIdx
                           ? 'w-3 h-3 sm:w-4 sm:h-4 bg-green-600 dark:bg-green-500'
                           : i < sectionIdx
                             ? 'w-2.5 h-2.5 sm:w-3 sm:h-3 bg-green-300 dark:bg-green-700'
                             : 'w-2.5 h-2.5 sm:w-3 sm:h-3 bg-gray-300 dark:bg-gray-600'
-                      }`}
-                      aria-label={`Section ${i + 1}`}
-                    />
+                      }`} />
+                    </button>
                   ))}
                 </div>
                 <button
                   type="button"
                   disabled={sectionIdx >= checklistScreens.length - 1}
                   onClick={() => setSectionIdx((i) => Math.min(checklistScreens.length - 1, i + 1))}
-                  className="px-3 py-1.5 sm:px-5 sm:py-2.5 sm:text-base text-sm font-semibold rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 disabled:opacity-30 transition-all active:scale-95"
+                  className="px-3 py-2.5 sm:px-5 sm:py-2.5 sm:text-base text-sm font-semibold rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 disabled:opacity-30 transition-all active:scale-95 min-h-[44px]"
                 >
                   Next →
                 </button>
@@ -940,7 +942,7 @@ export default function ShiftDetailPage() {
       <button
         type="button"
         className="fixed bottom-6 right-6 w-14 h-14 bg-green-700 text-white rounded-full shadow-lg hover:bg-green-800 transition-all hover:scale-110 flex items-center justify-center text-2xl font-bold"
-        onClick={() => alert('Help documentation coming soon')}
+        onClick={() => showToast('Help documentation coming soon', 'info')}
         aria-label="Help"
       >
         ?

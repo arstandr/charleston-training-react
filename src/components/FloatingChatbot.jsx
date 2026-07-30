@@ -753,7 +753,7 @@ If you don't know something, say so honestly in a friendly way. Keep every respo
           </div>
           <div className="p-4 border-t border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 rounded-b-2xl">
             <div className="flex gap-2">
-              <input type="text" value={input} onChange={(e) => setInput(e.target.value)} onKeyPress={handleKeyPress} placeholder="Ask Charlie..." className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-full focus:outline-none focus:border-green-800 dark:bg-gray-700 dark:text-white text-sm" disabled={loading} />
+              <input type="text" aria-label="Ask Charlie" value={input} onChange={(e) => setInput(e.target.value)} onKeyPress={handleKeyPress} placeholder="Ask Charlie..." className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-full focus:outline-none focus:border-green-800 dark:bg-gray-700 dark:text-white text-sm" disabled={loading} />
               <button type="button" onClick={sendMessage} disabled={loading || !input.trim()} className="bg-green-800 text-white w-12 h-12 rounded-full flex items-center justify-center hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all">➤</button>
             </div>
           </div>

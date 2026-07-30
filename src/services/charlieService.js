@@ -1,9 +1,10 @@
 /**
  * Charlie Service — Cloud Function wrapper, system prompt builder, tool definitions.
  */
+import { app } from '../firebase'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 
-const functions = getFunctions()
+const functions = getFunctions(app)
 
 /**
  * Call the authenticated charlieChat Cloud Function.

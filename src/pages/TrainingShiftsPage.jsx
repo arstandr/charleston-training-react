@@ -10,6 +10,7 @@ export default function TrainingShiftsPage() {
   const { currentUser } = useAuth()
   const [shifts, setShifts] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
 
   const userId = currentUser?.uid || currentUser?.id
   const role = (currentUser?.role || '').toLowerCase()
@@ -30,6 +31,7 @@ export default function TrainingShiftsPage() {
       setShifts(list)
     } catch (error) {
       console.error('Error loading shifts:', error)
+      setLoadError('Failed to load shifts. Please refresh and try again.')
     } finally {
       setLoading(false)
     }
@@ -52,7 +54,10 @@ export default function TrainingShiftsPage() {
       <main className="max-w-4xl mx-auto p-6">
         <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-6">Training Shifts</h2>
 
-        {shifts.length === 0 ? (
+        {loadError && (
+          <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{loadError}</div>
+        )}
+        {shifts.length === 0 && !loadError ? (
           <div className="text-center py-12">
             <p className="text-gray-500 dark:text-gray-400">No shifts scheduled yet</p>
           </div>
@@ -64,13 +69,11 @@ export default function TrainingShiftsPage() {
                 ?? (shift.scheduledDate ? new Date(shift.scheduledDate) : null)
 
               return (
-                <div
+                <button
                   key={shift.id}
-                  role="button"
-                  tabIndex={0}
+                  type="button"
                   onClick={() => navigate(`/shift/${shift.id}`)}
-                  onKeyDown={(e) => e.key === 'Enter' && navigate(`/shift/${shift.id}`)}
-                  className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6 hover:shadow-md transition-shadow cursor-pointer"
+                  className="w-full text-left bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6 hover:shadow-md transition-shadow cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] focus:ring-offset-1"
                 >
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-4">
@@ -115,7 +118,7 @@ export default function TrainingShiftsPage() {
                       </p>
                     </div>
                   )}
-                </div>
+                </button>
               )
             })}
           </div>

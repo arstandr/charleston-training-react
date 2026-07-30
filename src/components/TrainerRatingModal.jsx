@@ -13,6 +13,8 @@ export default function TrainerRatingModal({
   existingRating,
   onSave,
   onClose,
+  mandatory = false,
+  fullPage = false,
 }) {
   const [scores, setScores] = useState([0, 0, 0, 0, 0])
   const [notes, setNotes] = useState('')
@@ -35,8 +37,8 @@ export default function TrainerRatingModal({
 
   const handleSubmit = (e) => {
     e.preventDefault()
-    const hasOne = scores.some((s) => s > 0)
-    if (!hasOne) return
+    const complete = mandatory ? scores.every((s) => s > 0) : scores.some((s) => s > 0)
+    if (!complete) return
     onSave({
       trainerId,
       trainerName,
@@ -50,12 +52,78 @@ export default function TrainerRatingModal({
 
   if (!open) return null
 
+  if (fullPage) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-start justify-center p-4 pt-10">
+        <div className="trainer-rating-modal w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
+          {mandatory && (
+            <div className="mb-4 rounded-lg bg-red-600 px-4 py-3 text-center text-white">
+              <p className="text-sm font-bold uppercase tracking-wide">Required — Complete Before Continuing</p>
+              <p className="mt-0.5 text-xs text-red-100">You must rate your trainer from your last shift to access your dashboard.</p>
+            </div>
+          )}
+          <h2 className="text-xl font-bold text-gray-800">Rate your trainer</h2>
+          <p className="mt-1 text-sm text-gray-600">
+            {shiftLabel || shiftKey} · {trainerName || `#${trainerId}`}
+          </p>
+          <form onSubmit={handleSubmit} className="mt-6">
+            {TRAINER_RATING_CRITERIA.map((label, i) => (
+              <div key={i} className="mb-4">
+                <div className="mb-1 text-sm font-medium text-gray-700">{label}</div>
+                <div className="flex gap-1">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <button
+                      key={star}
+                      type="button"
+                      className="trainer-rating-star rounded p-1 text-2xl focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]"
+                      onClick={() => handleStar(i, star)}
+                      aria-label={`${star} star`}
+                    >
+                      {scores[i] >= star ? '★' : '☆'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <div className="mb-4">
+              <label className="mb-1 block text-sm font-medium text-gray-700">Notes (optional)</label>
+              <textarea
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                rows={3}
+                maxLength={MAX_NOTES}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="Any additional feedback..."
+              />
+              <div className="mt-0.5 text-right text-xs text-gray-500">
+                {notes.length} / {MAX_NOTES}
+              </div>
+            </div>
+            <button
+              type="submit"
+              className="btn w-full"
+              disabled={!scores.every((s) => s > 0)}
+            >
+              Submit &amp; Continue
+            </button>
+          </form>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={mandatory ? undefined : onClose}>
       <div
         className="trainer-rating-modal max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
+        {mandatory && (
+          <div className="mb-4 rounded-lg bg-red-600 px-4 py-3 text-center text-white">
+            <p className="text-sm font-bold uppercase tracking-wide">Required — Complete Before Continuing</p>
+            <p className="mt-0.5 text-xs text-red-100">You must rate your trainer from your last shift to access your dashboard.</p>
+          </div>
+        )}
         <h2 className="text-xl font-bold text-gray-800">Rate your trainer</h2>
         <p className="mt-1 text-sm text-gray-600">
           {shiftLabel || shiftKey} · {trainerName || `#${trainerId}`}
@@ -94,11 +162,17 @@ export default function TrainerRatingModal({
             </div>
           </div>
           <div className="flex gap-2">
-            <button type="button" className="btn btn-secondary" onClick={onClose}>
-              Cancel
-            </button>
-            <button type="submit" className="btn" disabled={!scores.some((s) => s > 0)}>
-              Save rating
+            {!mandatory && (
+              <button type="button" className="btn btn-secondary" onClick={onClose}>
+                Cancel
+              </button>
+            )}
+            <button
+              type="submit"
+              className="btn flex-1"
+              disabled={mandatory ? !scores.every((s) => s > 0) : !scores.some((s) => s > 0)}
+            >
+              {mandatory ? 'Submit & Continue' : 'Save rating'}
             </button>
           </div>
         </form>

@@ -1,7 +1,9 @@
 import { useState, useCallback, useEffect } from 'react'
 import { STAFF_ACCOUNTS_KEY, STAFF_LOGINS } from '../constants'
-import { getFromFirestore, saveToFirestore, ensureStaffAccountsFromFirestore, updateDocFields } from '../utils/firestore'
+import { getFromFirestore, saveToFirestore, ensureStaffAccountsFromFirestore } from '../utils/firestore'
 import { updateTrainer } from '../services/trainerService'
+import { ALLOWED_ROLES } from '../services/ToastSyncService'
+import { logClientError } from '../services/errorLogger'
 
 function loadFromStorage() {
   try {
@@ -27,10 +29,6 @@ export function useStaffAccounts() {
     return () => { cancelled = true }
   }, [])
 
-  // Write each entry to its own `data.{empNum}` field path instead of replacing the whole
-  // doc. This prevents stale browser tabs from clobbering other tabs' edits — a tab with an
-  // outdated localStorage will only overwrite keys it knows about; entries added/changed by
-  // other tabs survive.
   const saveStaffAccounts = useCallback(async (data) => {
     const payload = data || {}
     try {
@@ -38,17 +36,8 @@ export function useStaffAccounts() {
     } catch (_) {}
     setStaffAccounts(payload)
     try {
-      const cleaned = JSON.parse(JSON.stringify(payload))
-      const updates = { updatedAt: new Date().toISOString() }
-      for (const [k, v] of Object.entries(cleaned)) {
-        if (v && typeof v === 'object') updates[`data.${k}`] = v
-      }
-      const ok = await updateDocFields('config', 'staffAccounts', updates)
-      // Fallback: if the doc doesn't exist yet, fall back to the full-doc setter (creates it).
-      if (!ok) {
-        const created = await saveToFirestore('config', 'staffAccounts', { data: cleaned, updatedAt: updates.updatedAt })
-        return created
-      }
+      const toSave = JSON.parse(JSON.stringify({ data: payload, updatedAt: new Date().toISOString() }))
+      const ok = await saveToFirestore('config', 'staffAccounts', toSave)
       return ok
     } catch (e) {
       console.warn('[StaffAccounts] Firestore save failed:', e?.message)
@@ -65,7 +54,15 @@ export function useStaffAccounts() {
       entry = { role: 'trainer', archived: true }
       staff[id] = entry
     } else {
-      staff[id] = { ...entry, archived: true }
+      // Normalize invalid role before archiving — preserves the intent (archival) while fixing the role contract
+      let roleToWrite = entry.role
+      if (roleToWrite && !ALLOWED_ROLES.includes(roleToWrite)) {
+        const normalizedRole = 'trainer'
+        console.warn(`[archiveStaff] Invalid role "${roleToWrite}" on entry #${id} — normalizing to "${normalizedRole}"`)
+        logClientError('toastSync', 'invalid_role_normalized', new Error(`Invalid role: ${roleToWrite}`), { empNum: id, oldRole: roleToWrite, normalizedRole })
+        roleToWrite = normalizedRole
+      }
+      staff[id] = { ...entry, role: roleToWrite, archived: true }
     }
     setStaffAccounts({ ...staff })
     await saveStaffAccounts(staff)

@@ -48,7 +48,6 @@ export const SHIFT_SCENARIO_MAP = {
   rev2: [10, 15],
   rev3: [15, 20],
   rev4: [20, 25],
-  foodrun: [10, 15],
   cert: [0, 10],
 }
 

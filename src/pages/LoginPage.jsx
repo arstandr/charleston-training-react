@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { useOrg } from '../contexts/OrgContext'
@@ -9,7 +9,7 @@ import { STAFF_LOGINS } from '../constants'
 import { SESSION_REVOKED_KEY } from '../contexts/AuthContext'
 import RoleSelectorModal from '../components/RoleSelectorModal'
 import { getFunctions, httpsCallable } from 'firebase/functions'
-import { app } from '../firebase'
+import { app, auth } from '../firebase'
 
 const REMEMBER_KEY = 'loginRememberEmp'
 const REMEMBER_DAYS = 30
@@ -50,7 +50,7 @@ const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [pendingStaffUser, setPendingStaffUser] = useState(null)
   const [pendingStorePickUser, setPendingStorePickUser] = useState(null)
-  const debounceRef = useRef(null)
+  const [pendingRolePickUser, setPendingRolePickUser] = useState(null)
 
   useEffect(() => {
     try {
@@ -74,7 +74,8 @@ const [error, setError] = useState('')
     }
   }, [location.state, currentUser, pendingStaffUser, navigate])
 
-  async function doLogin(trimmed) {
+  async function doLogin(trimmed, options = {}) {
+    console.log('[LoginPage.doLogin] Starting with empNum:', trimmed)
     setError('')
     if (!trimmed) {
       setError('Please enter your employee number.')
@@ -86,7 +87,13 @@ const [error, setError] = useState('')
     }
     setSubmitting(true)
     try {
-      const user = await login(trimmed)
+      console.log('[LoginPage.doLogin] Calling login() function')
+      const user = await login(trimmed, options)
+      console.log('[LoginPage.doLogin] login() returned:', user)
+      if (user?.needsRolePicker) {
+        setPendingRolePickUser({ ...user, empNum: trimmed })
+        return
+      }
       // Only remove saved number after a successful login, not on failure
       localStorage.removeItem(REMEMBER_KEY)
       const role = (user?.role || '').toLowerCase()
@@ -100,31 +107,25 @@ const [error, setError] = useState('')
         navigate('/dashboard', { replace: true })
       }
     } catch (err) {
-      setError(err?.message || 'Sign-in error. Try again or use a supported browser.')
+      const rawMsg = err?.message || ''
+      const isGeneric = !rawMsg || rawMsg === 'Login failed' || rawMsg === 'Login failed. Try again.'
+      const displayMsg = isGeneric
+        ? `Login failed — show this to your manager: #${trimmed}, reason: sign-in error`
+        : rawMsg
+      setError(displayMsg)
     } finally {
       setSubmitting(false)
     }
   }
 
-  // Auto-submit when user types 3 or 4 digits (debounced 500ms)
-  useEffect(() => {
-    const trimmed = (empNum || '').trim()
-    if (trimmed.length === 3 || trimmed.length === 4) {
-      clearTimeout(debounceRef.current)
-      debounceRef.current = setTimeout(() => {
-        if (!submitting && !authLoading) {
-          doLogin(trimmed)
-        }
-      }, 500)
-    }
-    return () => clearTimeout(debounceRef.current)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [empNum])
-
   // Pre-warm the setCustomClaims Cloud Function the moment the login screen appears.
   // The ping is rejected (no auth/role yet) but still boots the function's container,
   // so the real call at submit time lands on a warm instance instead of cold-starting.
+  // Guard: skip the ping if there is already an active Firebase session — a stale
+  // anonymous session would make the ping authenticated, pass the uid check, then
+  // fail with role: undefined → 400.
   useEffect(() => {
+    if (auth.currentUser) return
     try {
       httpsCallable(getFunctions(app), 'setCustomClaims')({}).catch(() => {})
     } catch (_) {}
@@ -132,7 +133,6 @@ const [error, setError] = useState('')
 
   function handleSubmit(e) {
     e.preventDefault()
-    clearTimeout(debounceRef.current)
     doLogin((empNum || '').trim())
   }
 
@@ -167,15 +167,20 @@ const [error, setError] = useState('')
       return
     }
     if (selection.role === 'trainee') {
-      impersonate({
-        role: 'trainee',
-        name: selection.name,
-        store: selection.store,
-        traineeId: selection.traineeId,
-        id: selection.traineeId,
-      })
-      setPendingStaffUser(null)
-      navigate('/trainee', { replace: true })
+      // For staff members with trainee role, do a proper trainee login (with session token)
+      // not impersonate. Call login with forceRole='trainee' to trigger trainee login path.
+      setSubmitting(true)
+      login(pendingStaffUser.empNum, { forceRole: 'trainee' })
+        .then((user) => {
+          setPendingStaffUser(null)
+          navigate('/trainee-dashboard', { replace: true })
+        })
+        .catch((err) => {
+          console.error('Trainee login failed:', err.message)
+          setError(err?.message || 'Failed to login as trainee')
+          setSubmitting(false)
+          setPendingStaffUser(null)
+        })
       return
     }
   }
@@ -205,6 +210,12 @@ const [error, setError] = useState('')
     impersonate({ ...pendingStorePickUser, store })
     setPendingStorePickUser(null)
     navigate('/manager', { replace: true })
+  }
+
+  async function handleRolePickChoice(role) {
+    const saved = pendingRolePickUser
+    setPendingRolePickUser(null)
+    await doLogin(String(saved.staffInfo?.empNum ?? saved.empNum), { forceRole: role })
   }
 
   return (
@@ -281,6 +292,35 @@ const [error, setError] = useState('')
             </div>
             <button
               onClick={() => { setPendingStorePickUser(null); logout() }}
+              className="mt-4 w-full text-sm text-gray-500 hover:text-gray-700 underline bg-transparent border-0 cursor-pointer"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {pendingRolePickUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-lg p-6 mx-4 w-full max-w-sm">
+            <h2 className="text-lg font-bold text-gray-800 mb-1">
+              Welcome, {pendingRolePickUser.staffInfo?.name || 'there'}
+            </h2>
+            <p className="text-sm text-gray-600 mb-5">
+              Which role are you logging in as today?
+            </p>
+            <div className="flex flex-col gap-3">
+              {(pendingRolePickUser.availableRoles || []).filter((role) => ['trainer', 'trainee', 'manager', 'admin', 'owner'].includes(role)).map((role) => (
+                <button
+                  key={role}
+                  onClick={() => handleRolePickChoice(role)}
+                  className="btn w-full min-h-[44px]"
+                >
+                  {role.charAt(0).toUpperCase() + role.slice(1)}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setPendingRolePickUser(null)}
               className="mt-4 w-full text-sm text-gray-500 hover:text-gray-700 underline bg-transparent border-0 cursor-pointer"
             >
               Cancel

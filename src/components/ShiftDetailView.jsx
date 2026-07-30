@@ -454,9 +454,11 @@ export default function ShiftDetailView({
           <span className="font-medium text-gray-800">{meta.label}</span>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button type="button" className="btn btn-small btn-secondary" onClick={() => setStandardsQuizOpen(true)}>
-            Quiz: Standards &amp; 7 Steps
-          </button>
+          {shiftKey !== 'foodrun' && (
+            <button type="button" className="btn btn-small btn-secondary" onClick={() => setStandardsQuizOpen(true)}>
+              Quiz: Standards &amp; 7 Steps
+            </button>
+          )}
           {shiftTestId && traineeId && (
             <button type="button" className="btn btn-small btn-secondary" onClick={() => setReviewTestOpen(true)}>
               Review test

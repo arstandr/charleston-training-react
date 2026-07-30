@@ -40,12 +40,11 @@ export default function ManagerAssessSignModal({ open, row, onSign, onClose }) {
       })
       onSign({ readiness, managerScore })
     } else {
-      const readiness = {
-        knowledge: legacyKnowledge ? Number(legacyKnowledge) : undefined,
-        execution: legacyExecution ? Number(legacyExecution) : undefined,
-        confidence: legacyConfidence ? Number(legacyConfidence) : undefined,
-      }
-      onSign({ readiness, managerScore: undefined })
+      const readiness = {}
+      if (legacyKnowledge) readiness.knowledge = Number(legacyKnowledge)
+      if (legacyExecution) readiness.execution = Number(legacyExecution)
+      if (legacyConfidence) readiness.confidence = Number(legacyConfidence)
+      onSign({ readiness })
     }
     onClose()
   }

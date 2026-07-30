@@ -2,7 +2,8 @@ import {
   collection, query, where, orderBy, limit, getDocs, addDoc,
   doc, setDoc, getDoc, deleteField,
 } from 'firebase/firestore'
-import { db } from '../firebase'
+import { getFunctions, httpsCallable } from 'firebase/functions'
+import { db, app } from '../firebase'
 
 const COLLECTION = 'quizAttempts'
 const RESULTS_COLLECTION = 'testResults'
@@ -28,12 +29,17 @@ export async function createQuizAttempt(data) {
   return ref.id
 }
 
-/** Persist aggregate test result to Firestore (called after each official test). */
+/** Persist aggregate test result via Cloud Function (session-validated — cannot spoof scores). */
 export async function saveTestResult(traineeId, testId, resultData) {
-  if (!db || !traineeId || !testId) return
+  if (!traineeId || !testId) return
   try {
-    const ref = doc(db, RESULTS_COLLECTION, String(traineeId))
-    await setDoc(ref, { [testId]: resultData, updatedAt: new Date().toISOString() }, { merge: true })
+    const sessionToken = sessionStorage.getItem('sessionToken')
+    if (!sessionToken) {
+      console.warn('[saveTestResult] No session token — skipping persist')
+      return
+    }
+    const fn = httpsCallable(getFunctions(app), 'recordTestAttempt')
+    await fn({ traineeId, sessionToken, testId, resultData })
   } catch (e) {
     console.warn('[saveTestResult] Failed:', e?.message)
   }
@@ -178,51 +184,16 @@ export async function getTestReview(traineeId, testId) {
   }
 }
 
-/** Load all test results for a trainee from Firestore. Returns { testId: { count, scores, passed } }
- *  For canonical IDs like "T-Store-123", also checks the bare "123" doc and merges both.
- *  This handles the case where some tests were saved under a ghost bare-ID before cleanup. */
+/** Load all test results for a trainee from Firestore. Returns { testId: { count, scores, passed } } */
 export async function loadTestResults(traineeId) {
   if (!db || !traineeId) return {}
   try {
     const ref = doc(db, RESULTS_COLLECTION, String(traineeId))
     const snap = await getDoc(ref)
-    const canonical = snap.exists() ? snap.data() : null
-
-    // For canonical "T-Store-123" IDs, also load the bare "123" doc and merge
-    const parts = String(traineeId).split('-')
-    let bare = null
-    if (parts.length === 3 && parts[0] === 'T') {
-      const bareId = parts[2]
-      const bareRef = doc(db, RESULTS_COLLECTION, bareId)
-      const bareSnap = await getDoc(bareRef)
-      if (bareSnap.exists()) bare = bareSnap.data()
-    }
-
-    if (!canonical && !bare) return {}
-
-    // Merge: canonical takes precedence over bare for any shared test key
-    const merged = { ...(bare || {}) }
-    delete merged.updatedAt
-    for (const [k, v] of Object.entries(canonical || {})) {
-      if (k === 'updatedAt') continue
-      if (!merged[k]) {
-        merged[k] = v
-      } else {
-        // Both have it — prefer passed=true, higher count, combined scores
-        const b = merged[k]
-        const existScores = b.scores || []
-        const newScores = v.scores || []
-        const allScores = [...existScores]
-        for (const s of newScores) { if (!allScores.includes(s)) allScores.push(s) }
-        merged[k] = {
-          ...b, ...v,
-          passed: b.passed || v.passed,
-          count: Math.max(b.count || 0, v.count || 0),
-          scores: allScores,
-        }
-      }
-    }
-    return merged
+    if (!snap.exists()) return {}
+    const data = snap.data()
+    delete data.updatedAt
+    return data
   } catch (e) {
     console.warn('[loadTestResults] Failed:', e?.message)
     return {}

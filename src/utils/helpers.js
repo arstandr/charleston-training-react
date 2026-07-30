@@ -708,14 +708,12 @@ export function signShiftAsManager(trainingData, traineeId, shiftKey, managerEmp
   if (!item || !item.trainerSignedAt) return trainingData
   rec.checklists = rec.checklists || {}
   rec.checklists[shiftKey] = rec.checklists[shiftKey] || {}
-  if (readiness && (readiness.knowledge != null || readiness.execution != null || readiness.confidence != null || Object.keys(readiness).some((k) => typeof readiness[k] === 'number'))) {
-    rec.checklists[shiftKey].readiness = {
-      ...(rec.checklists[shiftKey].readiness || {}),
-      ...readiness,
-      knowledge: readiness.knowledge,
-      execution: readiness.execution,
-      confidence: readiness.confidence,
+  if (readiness && typeof readiness === 'object') {
+    const merged = { ...(rec.checklists[shiftKey].readiness || {}) }
+    for (const [k, v] of Object.entries(readiness)) {
+      if (typeof v === 'number') merged[k] = v
     }
+    if (Object.keys(merged).length) rec.checklists[shiftKey].readiness = merged
   }
   if (managerScore != null && typeof managerScore === 'number') {
     rec.checklists[shiftKey].managerScore = managerScore

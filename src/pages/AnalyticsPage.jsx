@@ -225,13 +225,11 @@ export default function AnalyticsPage() {
                     const starRating = breakdown.overallAvg ?? t.starRating ?? 0
                     const ratingsCount = breakdown.count ?? t.ratingsCount ?? 0
                     return (
-                      <div
+                      <button
                         key={t.empNum}
-                        role="button"
-                        tabIndex={0}
+                        type="button"
                         onClick={() => setSelectedTrainerId(t.empNum)}
-                        onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && setSelectedTrainerId(t.empNum)}
-                        className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm cursor-pointer transition-shadow hover:shadow-md focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] focus:ring-offset-2"
+                        className="w-full text-left rounded-xl border border-gray-200 bg-white p-4 shadow-sm cursor-pointer transition-shadow hover:shadow-md focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] focus:ring-offset-2"
                       >
                         <div className="font-semibold text-gray-800">{t.name || `#${t.empNum}`}</div>
                         <div className="mt-1 text-sm text-gray-600">
@@ -240,7 +238,7 @@ export default function AnalyticsPage() {
                             <span className="ml-1 text-gray-500"> · {trainerCompletedCount[t.empNum]} shifts completed</span>
                           )}
                         </div>
-                      </div>
+                      </button>
                     )
                   })}
                 </div>

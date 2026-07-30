@@ -219,8 +219,6 @@ function detectLayout(pages) {
 
   headerGroup.sort((a, b) => a.x - b.x)
   const dayColumnXs = headerGroup.map((it) => it.x)
-  console.log('[HotSchedules] Day column x-positions:', dayColumnXs, 'from', headerGroup.map((it) => it.dayName))
-
   // Find AM/PM label column x-position
   // Standalone "AM"/"PM" items that are LEFT of the first day column
   const allItems = pages.flatMap((p) => p.items)
@@ -244,8 +242,6 @@ function detectLayout(pages) {
       ampmX = x
     }
   }
-  console.log('[HotSchedules] AM/PM column x:', ampmX, `(${maxCount} items)`)
-
   if (!dayColumnXs.length || !ampmX) return null
 
   return { dayColumnXs, ampmX }
@@ -272,8 +268,6 @@ function parseEmployeeSchedules(pages, layout, weekDates) {
       : dayColumnXs[i] + 100
     colBounds.push({ left, right, idx: i })
   }
-  console.log('[HotSchedules] Column bounds:', colBounds.map((c) => `[${c.left}-${c.right}]`).join(' '))
-
   function getColIndex(x) {
     for (const { left, right, idx } of colBounds) {
       if (x >= left && x < right) return idx
@@ -412,22 +406,8 @@ export async function parseHotSchedulesPDF(file) {
     return { weekDates: [], storeName: '', employees: [] }
   }
 
-  // Debug: dump raw text structure
-  console.group('[HotSchedules] PDF extraction debug')
-  for (const page of pages.slice(0, 2)) {
-    console.group(`Page ${page.pageIndex} (${page.items.length} items)`)
-    const rows = groupByRow(page.items)
-    rows.slice(0, 30).forEach((row, ri) => {
-      console.log(`Row ${ri}: ${row.map((it) => `"${it.str}"@(${it.x},${it.y})`).join('  ')}`)
-    })
-    if (rows.length > 30) console.log(`  ... ${rows.length - 30} more rows`)
-    console.groupEnd()
-  }
-  console.groupEnd()
-
   // 1. Find week dates from date range header
   const weekDates = findWeekDates(pages)
-  console.log('[HotSchedules] Week dates:', weekDates)
   if (!weekDates.length) {
     return { weekDates: [], storeName: '', employees: [] }
   }
@@ -450,7 +430,6 @@ export async function parseHotSchedulesPDF(file) {
 
   // 4. Parse employee schedules
   const employees = parseEmployeeSchedules(pages, layout, weekDates)
-  console.log('[HotSchedules] Parsed', employees.length, 'employees with shifts')
 
   return { weekDates, storeName, employees }
 }

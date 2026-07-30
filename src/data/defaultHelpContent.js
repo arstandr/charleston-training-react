@@ -27,7 +27,7 @@ Policies: Non-smoking (includes E-cigs). Parking: Southside 2 rows back (Best Bu
 === DAILY SOUPS & GARNISHES ===
 - **Baked Potato (Daily):** Cheddar, Bacon, Green Onion.
 - **Mon:** Chicken Tortilla (Zebra cheese, tortilla strips).
-- **Tue:** Creamy Chicken Noodle (Parsley).
+- **Tue:** Creamy Chicken Noodle and Mushroom (Parsley).
 - **Wed:** Southwestern Bean (Diced tomatoes).
 - **Thu:** Tomato Basil (Parmesan).
 - **Fri:** New England Clam Chowder (Parsley, oyster crackers).

@@ -1,4 +1,4 @@
-import { doc, getDoc, setDoc, updateDoc, onSnapshot, deleteField } from 'firebase/firestore'
+import { doc, getDoc, setDoc, updateDoc, onSnapshot, deleteField, collection, getDocs } from 'firebase/firestore'
 import { db } from '../firebase'
 import { STAFF_ACCOUNTS_KEY } from '../constants'
 
@@ -78,12 +78,11 @@ export async function ensureStaffAccountsFromFirestore() {
 
 export async function ensureTrainingDataFromFirestore() {
   try {
-    const docSnap = await getFromFirestore('config', 'trainingData')
-    if (!docSnap || typeof docSnap !== 'object') return
-    const { id: _id, data: dataKey, ...rest } = docSnap
-    const remote = dataKey && typeof dataKey === 'object' ? dataKey : rest
-    if (typeof remote !== 'object') return
-    // Firestore is the source of truth — write directly to localStorage
+    if (!db) return
+    const snap = await getDocs(collection(db, 'trainees'))
+    if (snap.empty) return
+    const remote = {}
+    snap.docs.forEach((d) => { remote[d.id] = d.data() })
     try {
       localStorage.setItem('trainingData', JSON.stringify(remote))
     } catch (_) {}

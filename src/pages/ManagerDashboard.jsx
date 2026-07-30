@@ -236,7 +236,10 @@ export default function ManagerDashboard() {
     }
   }, [location.state?.viewTraineeId, location.pathname, navigate])
 
-  const trainees = listTrainees({ store, includeArchived: false }).filter((t) => !t.archived)
+  const trainerEmpNums = useMemo(() => new Set(trainers.map((t) => String(t.empNum || ''))), [trainers])
+  const trainees = listTrainees({ store, includeArchived: false })
+    .filter((t) => !t.archived)
+    .filter((t) => !trainerEmpNums.has(String(t.employeeNumber || '')))
   const filteredTrainees = useMemo(() => {
     const q = (managerSearch || '').toLowerCase().trim()
     if (!q) return trainees
@@ -481,7 +484,6 @@ export default function ManagerDashboard() {
           [`data.${traineeId}.schedule.${shiftKey}.pendingAt`]: deleteField(),
           'updatedAt': new Date().toISOString(),
         })
-        console.log('[Approve] Removed pendingTrainer from config/trainingData for', traineeId, shiftKey)
       } catch (e) {
         console.error('[Approve] Failed to remove pendingTrainer:', e?.message, e?.code)
       }
@@ -506,7 +508,6 @@ export default function ManagerDashboard() {
         [`data.${traineeId}.schedule.${shiftKey}.pendingAt`]: deleteField(),
         'updatedAt': new Date().toISOString(),
       })
-      console.log('[Deny] Removed pendingTrainer from config/trainingData for', traineeId, shiftKey)
     } catch (e) {
       console.error('[Deny] Failed to remove pendingTrainer:', e?.message, e?.code)
     }

@@ -10,8 +10,8 @@ import { STAFF_LOGINS, STAFF_ACCOUNTS_KEY } from '../constants'
 import { ensureStaffAccountsFromFirestore, ensureTrainingDataFromFirestore } from '../utils/firestore'
 import { findTraineeIdByEmployeeNumber } from '../utils/helpers'
 import { logAuditEvent } from '../services/auditService'
-import { setErrorLoggerUser, logFeatureUsage } from '../services/errorLogger'
-import { createSession, takeOverSession, heartbeat, subscribeSession } from '../services/activeSessionService'
+import { setErrorLoggerUser, logFeatureUsage, logClientError } from '../services/errorLogger'
+import { createSession, takeOverSession, heartbeat, subscribeSession, logoutSession } from '../services/activeSessionService'
 
 const SESSION_REVOKED_KEY = 'sessionRevokedMessage'
 
@@ -190,7 +190,11 @@ export function AuthProvider({ children }) {
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
       if (impersonatingRef.current) return
 
-      const hasTraineeSession = sessionStorage.getItem('sessionToken') && sessionStorage.getItem('traineeId')
+      // Guard against overwriting an active trainee session — check both sessionStorage
+      // and the in-memory ref so we don't miss the window between setCurrentUser and storage write
+      const hasTraineeSession =
+        (sessionStorage.getItem('sessionToken') && sessionStorage.getItem('traineeId')) ||
+        currentSessionTokenRef.current != null
       if (hasTraineeSession) return
 
       if (!fbUser) {
@@ -246,7 +250,7 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(async (empNum, options = {}) => {
     sessionRevokedRef.current = false
-    const { rememberMe = false } = options
+    const { rememberMe = false, forceRole = null } = options
     const sessionExpiryMs = rememberMe ? SESSION_30D_MS : SESSION_24H_MS
     const sessionExpiry = Date.now() + sessionExpiryMs
     let staffAccounts = loadStaffAccounts()
@@ -261,15 +265,59 @@ export function AuthProvider({ children }) {
     }
 
     if (staff?.archived) {
+      logClientError('auth', 'login_failed', new Error('Account archived'), { empNum, stage: 'archived' })
       throw new Error('This account has been archived. Contact your manager.')
     }
 
+    // Toast fallback for trainer: if still not found after Firestore re-sync, look up in Toast.
+    // This handles new trainers whose staffAccounts entry was never created.
+    if (!staff && forceRole !== 'trainee') {
+      try {
+        const ensureAccess = httpsCallable(getFunctions(app), 'ensureEmployeeAccess')
+        const result = await ensureAccess({ empNum })
+        const accessResult = result.data
+        if (accessResult?.role === 'trainer') {
+          // Record was just created — reload staffAccounts and retry
+          await ensureStaffAccountsFromFirestore()
+          staffAccounts = loadStaffAccounts()
+          staff = staffAccounts[empNum] ?? STAFF_LOGINS[empNum]
+        } else if (accessResult?.role === 'trainee') {
+          // This person is a trainee — fall through to trainee login below
+          staff = null
+        }
+      } catch (accessErr) {
+        const code = accessErr?.code || ''
+        if (code.includes('not-found')) {
+          logClientError('auth', 'login_failed', accessErr, { empNum, stage: 'staff_not_found' })
+          throw new Error('Employee not found. Contact your manager.')
+        }
+        if (code.includes('permission-denied')) {
+          logClientError('auth', 'login_failed', accessErr, { empNum, stage: 'archived' })
+          throw new Error('Account is inactive.')
+        }
+        // For any other error (network, etc.) — fall through to trainee path
+        // so login still has a chance to succeed
+      }
+    }
+
     if (staff) {
-      const traineeId = findTraineeIdByEmployeeNumber(trainingData, empNum)
-      if (traineeId && staff.role !== 'admin' && staff.role !== 'owner') {
-      } else {
+      const ROUTABLE_ROLES = ['trainer', 'trainee', 'manager', 'admin', 'owner']
+      const routableRoles = (staff.roles || []).filter(r => ROUTABLE_ROLES.includes(r))
+      const availableRoles = routableRoles.length > 1 ? routableRoles : null
+      if (availableRoles && !forceRole) {
+        return { needsRolePicker: true, staffInfo: { ...staff, empNum }, availableRoles }
+      }
+
+      // If the active role resolves to 'trainee' (forced OR from staffAccounts), skip the
+      // staff path and use the trainee session path below. A trainee who also has a
+      // staffAccounts entry (Toast sync) must still log in via createTraineeSession —
+      // the staff path produces a Firebase-UID user with no traineeId, so the dashboard
+      // can never find their training record.
+      const resolvedRole = forceRole || staff.role
+      if (resolvedRole !== 'trainee') {
         const orgId = staff.orgId ?? 'org_charlestons'
-        let staffUser = { role: staff.role, name: staff.name, store: staff.store, empNum, staff: true, orgId }
+        const activeRole = resolvedRole
+        let staffUser = { role: activeRole, name: staff.name, store: staff.store, empNum, staff: true, orgId }
         try {
           const cred = await signInAnonymously(auth)
           if (cred?.user) {
@@ -277,7 +325,7 @@ export function AuthProvider({ children }) {
             const payload = {
               empNum,
               name: staff.name,
-              role: staff.role,
+              role: activeRole,
               store: staff.store,
               orgId,
               staff: true,
@@ -323,17 +371,32 @@ export function AuthProvider({ children }) {
       }
     }
 
-    try {
+    // Silent-strand guard: if staff was found but the resolved role is not 'trainee' and
+    // was not handled above (not in ROUTABLE_ROLES), log it before falling through.
+    if (staff) {
+      const resolvedRoleCheck = forceRole || staff.role
+      const ROUTABLE_ROLES_CHECK = ['trainer', 'trainee', 'manager', 'admin', 'owner']
+      if (resolvedRoleCheck && !ROUTABLE_ROLES_CHECK.includes(resolvedRoleCheck)) {
+        logClientError('auth', 'login_failed', new Error(`Unrecognized role: ${resolvedRoleCheck}`), { empNum, stage: 'role_invalid', role: resolvedRoleCheck })
+      }
+    }
+
+    // Inner helper: run createSession and handle the result (conflict modal, ok, etc.)
+    // Extracted so the not-found retry path can reuse it without duplicating the conflict logic.
+    const runCreateSession = async () => {
       const result = await createSession(String(empNum).trim())
+      console.log('[Auth] createSession result:', result)
 
       if (result.status === 'conflict') {
+        console.log('[Auth] Conflict detected, showing modal for trainee:', result.traineeId)
         return new Promise((resolve, reject) => {
+          console.log('[Auth] Setting sessionConflictModal state')
           setSessionConflictModal({
             user: result.user,
             traineeId: result.traineeId,
             onContinue: async () => {
               try {
-                const res = await takeOverSession(result.traineeId)
+                const res = await takeOverSession(result.traineeId, result.user?.empNum)
                 const { sessionToken } = res
                 const u = result.user
                 const userWithId = { ...u, id: u.traineeId }
@@ -364,6 +427,8 @@ export function AuthProvider({ children }) {
       }
 
       if (result.status !== 'ok') {
+        const statusErr = new Error(`createSession returned status: ${result.status}`)
+        logClientError('auth', 'login_failed', statusErr, { empNum, stage: 'trainee_session_failed', status: result.status })
         throw new Error('Login failed')
       }
 
@@ -382,9 +447,53 @@ export function AuthProvider({ children }) {
       startHeartbeat(traineeId, sessionToken)
 
       return userWithId
+    }
+
+    try {
+      return await runCreateSession()
     } catch (e) {
-      const msg = e?.message || e?.code || 'Login failed. Try again.'
-      throw new Error(typeof msg === 'string' ? msg : 'Login failed. Try again.')
+      // Toast fallback for trainees: if the trainee record is missing, create it and retry once.
+      // Never retry more than once — structured as a linear try sequence, not a loop.
+      const code = e?.code || ''
+      const isNotFound = code.includes('not-found') || e?.message?.includes('not-found')
+      if (!isNotFound) {
+        logClientError('auth', 'login_failed', e, { empNum, stage: 'trainee_session_failed' })
+        const msg = e?.message || e?.code || 'Login failed. Try again.'
+        throw new Error(typeof msg === 'string' ? msg : 'Login failed. Try again.')
+      }
+
+      // Step 1: Try to provision the trainee record via Toast
+      let accessErr = null
+      try {
+        const ensureAccess = httpsCallable(getFunctions(app), 'ensureEmployeeAccess')
+        await ensureAccess({ empNum })
+      } catch (err) {
+        accessErr = err
+      }
+
+      if (accessErr) {
+        const accessCode = accessErr?.code || ''
+        if (accessCode.includes('not-found')) {
+          logClientError('auth', 'login_failed', accessErr, { empNum, stage: 'staff_not_found' })
+          throw new Error('Employee not found. Contact your manager.')
+        }
+        if (accessCode.includes('permission-denied')) {
+          logClientError('auth', 'login_failed', accessErr, { empNum, stage: 'archived' })
+          throw new Error('Account is inactive.')
+        }
+        // ensureAccess failed for another reason — fall back to original error
+        logClientError('auth', 'login_failed', accessErr, { empNum, stage: 'trainee_session_failed' })
+        const msg = e?.message || e?.code || 'Login failed. Try again.'
+        throw new Error(typeof msg === 'string' ? msg : 'Login failed. Try again.')
+      }
+
+      // Step 2: Record provisioned — retry createSession exactly once
+      try {
+        return await runCreateSession()
+      } catch (_retryErr) {
+        logClientError('auth', 'login_failed', _retryErr, { empNum, stage: 'trainee_session_failed' })
+        throw new Error('Contact your manager to be added to the training system.')
+      }
     }
   }, [])
 
@@ -408,6 +517,11 @@ export function AuthProvider({ children }) {
     const name = currentUser?.name
     const isTrainee = currentUser?.role === 'trainee'
 
+    // Capture trainee session identifiers before clearing storage
+    const storedTraineeId = sessionStorage.getItem('traineeId')
+    const storedSessionToken = sessionStorage.getItem('sessionToken')
+
+    // Stop heartbeat and session subscription immediately — before any async work
     if (heartbeatRef.current) {
       clearInterval(heartbeatRef.current)
       heartbeatRef.current = null
@@ -417,22 +531,33 @@ export function AuthProvider({ children }) {
       sessionUnsubscribeRef.current = null
     }
 
+    // Clear session token ref first so any in-flight snapshot callbacks see null and bail
+    currentSessionTokenRef.current = null
+
+    // Reset impersonation flag — must be cleared so onAuthStateChanged works on next login
+    impersonatingRef.current = false
+    sessionRevokedRef.current = false
+
+    // Clear all sessionStorage regardless of role — ensures no stale data survives for re-login
+    sessionStorage.removeItem('sessionToken')
+    sessionStorage.removeItem('traineeId')
+    sessionStorage.removeItem('currentUser')
+
     if (isTrainee) {
-      sessionStorage.removeItem('sessionToken')
-      sessionStorage.removeItem('traineeId')
-      sessionStorage.removeItem('currentUser')
-      currentSessionTokenRef.current = null
+      // Fire-and-forget: notify server the session is over
+      logoutSession(storedTraineeId, storedSessionToken)
     } else if (uid) {
       try {
         logAuditEvent(uid, name, 'logout', {})
       } catch (_) {}
-      try {
-        sessionStorage.removeItem('currentUser')
-      } catch (_) {}
-      try {
-        await signOut(auth)
-      } catch (_) {}
     }
+
+    // Always sign out Firebase Auth — clears any lingering anonymous session from a prior
+    // staff login on the same device. Without this, onAuthStateChanged fires during a
+    // subsequent trainee login and can overwrite the freshly-set trainee currentUser.
+    try {
+      await signOut(auth)
+    } catch (_) {}
 
     setCurrentUser(null)
     setErrorLoggerUser(null)

@@ -33,8 +33,14 @@ export async function getTrainersByLocation(locationGuid) {
     .sort((a, b) => (b.data().rating || 0) - (a.data().rating || 0))
     .map((d) => {
       const data = d.data()
+      // employeeNumber is the human-readable emp# (e.g. "4074").
+      // For new-shape docs, doc ID is the Toast GUID — never a valid emp#.
+      // For legacy-shape docs, doc ID is a Firestore auto-ID — also never valid.
+      // We always prefer the stored employeeNumber/empNum field over d.id.
+      const employeeNumber = data.employeeNumber || data.empNum || data.externalEmployeeId || null
       return {
-        empNum: d.id,
+        empNum: employeeNumber,
+        firestoreDocId: d.id,
         name: ((data.firstName || '') + ' ' + (data.lastName || '')).trim() || 'Trainer',
         role: 'trainer',
         starRating: data.rating || 0,

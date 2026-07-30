@@ -39,6 +39,7 @@ export default function OfficialTestConfirmModal({
             type="password"
             inputMode="numeric"
             pattern="[0-9]*"
+            aria-label="Manager employee number"
             placeholder="Enter manager employee number"
             value={managerPin}
             onChange={(e) => onPinChange(e.target.value.replace(/\D/g, ''))}
