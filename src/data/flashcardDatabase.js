@@ -1,24 +1,3 @@
-/** Legacy "Study for Certification" subset (11 cards) – use for injection alongside Bar/Menu decks. */
-export const VERBAL_CERT_DECK = {
-  id: 'verbal_cert',
-  title: 'Study for Certification',
-  category: 'Certification',
-  cards: [
-    { front: 'What is our phone number?', back: 'Carmel: (317) 846-5965\nIndianapolis: (317) 841-0442' },
-    { front: 'Who are the Managers?', back: 'Owner: Gary Richenberg.\nCarmel: Adam (GM).\nIndianapolis: Ben (GM).\nKitchen Managers: Jorge Pineda (check schedule).' },
-    { front: 'Where do you park?', back: 'Carmel: Southside of building, 2 rows back (front of Best Buy).\nIndianapolis: Back of the restaurant.' },
-    { front: 'What is our address?', back: 'Carmel: 14636 Greyhound Plaza, Carmel, IN 46032 | (317) 846-5965\nIndianapolis: 6815 E. 82nd Street, Indianapolis, IN 46250 | (317) 841-0442' },
-    { front: 'Proper phone greeting?', back: '"Good [Morning/Afternoon/Evening], Charleston\'s [Location], this is [Name]."' },
-    { front: 'Do we take checks?', back: 'No personal checks. Traveler checks OK.' },
-    { front: 'What credit cards do we accept?', back: 'Visa, MasterCard, Amex, Discover.' },
-    { front: 'Employee Smoking Policy?', back: 'No smoking allowed on property (includes E-cigs).' },
-    { front: 'Pivot Point System?', back: "Seat 1 is to server's immediate left. Number clockwise. Prevents 'auctioning' food." },
-    { front: 'Time standard for greets?', back: '30 Seconds.' },
-    { front: 'What are the 4 R\'s?', back: 'Remove • Report • Red Check • Run' },
-    { front: 'Full Hands In?', back: 'Always enter kitchen with dirty dishes. Never go in empty handed.' },
-  ],
-}
-
 // Study for Certification – full flashcard deck (real answers from training docs)
 const VERBAL_CERT_STUDY_DATA = [
   { front: "What is our phone number?", back: "Carmel: (317) 846-5965\nIndianapolis: (317) 841-0442" },
