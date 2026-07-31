@@ -37,7 +37,7 @@ import {
   getCertificationProgress,
   isSameCalendarDay,
 } from '../utils/helpers'
-import { STORES, REQUIRED_SHIFT_KEYS, SHIFT_META, getStoreDisplayName } from '../constants'
+import { STORES, REQUIRED_SHIFT_KEYS, SHIFT_META, HOST_SHIFT_KEY, getStoreDisplayName } from '../constants'
 import { useToastStoreGuids } from '../hooks/useToastStoreGuids'
 import { ensureTrainingDataFromFirestore, updateDocFields, deleteField } from '../utils/firestore'
 import ManagerNavBar from '../components/ManagerNavBar'
@@ -356,7 +356,12 @@ export default function ManagerDashboard() {
     })
   }, [scheduleRows])
 
-  const scheduleShiftColumns = REQUIRED_SHIFT_KEYS.filter((k) => SHIFT_META && k in SHIFT_META)
+  // Host is optional, so only give it a grid column when someone on this grid actually has one.
+  const scheduleShiftColumns = useMemo(() => {
+    const anyHost = scheduleGridByTrainee.some((row) => row.cells?.[HOST_SHIFT_KEY])
+    const keys = anyHost ? [HOST_SHIFT_KEY, ...REQUIRED_SHIFT_KEYS] : REQUIRED_SHIFT_KEYS
+    return keys.filter((k) => SHIFT_META && k in SHIFT_META)
+  }, [scheduleGridByTrainee])
 
   const testsToReview = useMemo(() => {
     const officialIds = TESTS.filter((t) => t.id !== 'bonus_test').map((t) => t.id)

@@ -1,4 +1,4 @@
-import { REQUIRED_SHIFT_KEYS, SHIFT_META } from '../constants'
+import { getRequiredShiftKeys, SHIFT_META } from '../constants'
 import { formatWhenHuman, getShiftStatus, getCertificationProgress } from '../utils/helpers'
 
 function getName(staffAccounts, emp) {
@@ -13,7 +13,7 @@ export default function PrintTrainingSummary({ trainee, trainingData, staffAccou
   const testResults = rec.testResults || []
   const prog = getCertificationProgress(rec)
 
-  const rows = REQUIRED_SHIFT_KEYS.map((key) => {
+  const rows = getRequiredShiftKeys(rec).map((key) => {
     const item = schedule[key]
     const status = getShiftStatus(rec, key)
     const meta = SHIFT_META[key] || { label: key }

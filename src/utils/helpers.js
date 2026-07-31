@@ -1,4 +1,4 @@
-import { REQUIRED_SHIFT_KEYS, SHIFT_META } from '../constants'
+import { REQUIRED_SHIFT_KEYS, SHIFT_META, HOST_SHIFT_KEY, getRequiredShiftKeys } from '../constants'
 import { SHIFT_TEST_RULES, TESTS, PRETTY_TEST_NAMES } from '../data/quizDatabase'
 import { analyzeTraineeRisk } from './RiskEngine'
 import { getRequiredItemIds } from '../data/shiftChecklistTemplates'
@@ -109,10 +109,33 @@ export function isTestPassedFromStorage(traineeId, testId) {
   }
 }
 
-/** Shift is complete when trainer + manager signed and all required tests passed */
+/**
+ * Resolve a shift's `when` to the moment it is considered over.
+ * A `when` with a time uses that time; a bare date falls back to the end of that day.
+ */
+function shiftWhenMs(when) {
+  if (!when) return null
+  if (typeof when === 'string' && !when.includes('T')) {
+    const [y, m, d] = when.split('-').map(Number)
+    if (!y || !m || !d) return null
+    return new Date(y, m - 1, d, 23, 59, 59).getTime()
+  }
+  const t = new Date(when).getTime()
+  return Number.isNaN(t) ? null : t
+}
+
+/**
+ * Shift is complete when trainer + manager signed and all required tests passed.
+ * The host shift is the exception — no trainer sits with the trainee and there is no test,
+ * so it completes on its own once the scheduled time has passed.
+ */
 export function isShiftComplete(rec, shiftKey, explicitTraineeId) {
   if (!rec?.schedule?.[shiftKey]) return false
   const item = rec.schedule[shiftKey]
+  if (shiftKey === HOST_SHIFT_KEY) {
+    const ms = shiftWhenMs(item.when)
+    return ms != null && Date.now() >= ms
+  }
   if (!item.trainerSignedAt || !item.managerSignedAt) return false
   const traineeId = explicitTraineeId || rec.id || rec.traineeId
   const ids = getShiftRequiredTestIds(shiftKey, traineeId)
@@ -153,18 +176,22 @@ export function getComplianceStats(trainingData, storeFilter = null) {
   return { totalTrainerSigned, dualSigned, compliancePct }
 }
 
-/** Certification progress: done count, total (6), pct 0–100 */
+/** Certification progress: done count, total (6, or 7 when a host shift is scheduled), pct 0–100 */
 export function getCertificationProgress(rec) {
-  const total = (REQUIRED_SHIFT_KEYS || []).length || 6
+  const keys = getRequiredShiftKeys(rec) || REQUIRED_SHIFT_KEYS || []
+  const total = keys.length || 6
   let done = 0
-  ;(REQUIRED_SHIFT_KEYS || []).forEach((key) => {
+  keys.forEach((key) => {
     if (isShiftComplete(rec, key)) done++
   })
   const pct = total ? Math.round((done / total) * 100) : 0
   return { done, total, pct }
 }
 
-/** Progress by trainer sign-off only: completedShifts = count with trainerSignedAt, totalShifts = REQUIRED_SHIFT_KEYS.length. */
+/**
+ * Progress by trainer sign-off only: completedShifts = count with trainerSignedAt, totalShifts = REQUIRED_SHIFT_KEYS.length.
+ * Deliberately excludes the host shift — nobody signs off on it, so counting it here would cap every trainee below 100%.
+ */
 export function getShiftProgressByTrainerSign(rec) {
   const total = (REQUIRED_SHIFT_KEYS || []).length || 6
   let completedShifts = 0
@@ -191,7 +218,7 @@ export function getTrainingHealth(rec) {
 }
 
 /** Next incomplete shift (6-hour lookback); returns { key, when, label, icon, trainerName, complete } or null */
-export function getNextShift(rec, staffAccounts, shiftTypesOrder = ['follow', 'rev1', 'rev2', 'rev3', 'rev4', 'foodrun', 'cert']) {
+export function getNextShift(rec, staffAccounts, shiftTypesOrder = ['host', 'follow', 'rev1', 'rev2', 'rev3', 'rev4', 'foodrun', 'cert']) {
   if (!rec?.schedule) return null
   const sixHoursAgo = Date.now() - 6 * 3600 * 1000
   const getName = (emp) => {

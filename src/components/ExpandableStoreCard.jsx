@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { getStoreDisplayName, STAFF_LOGINS, SHIFT_TYPES, REQUIRED_SHIFT_KEYS } from '../constants'
+import { getStoreDisplayName, STAFF_LOGINS, SHIFT_TYPES, getRequiredShiftKeys } from '../constants'
 import ArchivedEmployees from './ArchivedEmployees'
 import {
   getCertificationProgress,
@@ -230,9 +230,9 @@ function TraineePanel({ trainees, trainingData, mergedStaff }) {
               </div>
             </div>
 
-            {/* 6-step progress bar */}
+            {/* Progress bar — one segment per required shift (7 when a host shift is scheduled) */}
             <div className="flex gap-1 mb-2">
-              {REQUIRED_SHIFT_KEYS.map((key) => {
+              {getRequiredShiftKeys(t).map((key) => {
                 const done = isShiftComplete(t, key)
                 return (
                   <div

@@ -723,6 +723,14 @@ export const SHIFT_TEMPLATES = {
 // SHIFT_TYPES — display metadata for shift cards (keep for compatibility)
 // ============================================================
 export const SHIFT_TYPES = {
+  host: {
+    key: 'host',
+    label: 'Host shift',
+    icon: '🛎️',
+    dayLabel: 'Day 1',
+    description: 'Trainee works a host shift to learn the floor plan, table numbers, and flow. No trainer, no checklist, no test.',
+    linkedTest: null,
+  },
   follow: {
     key: 'follow',
     label: 'Follow shift',

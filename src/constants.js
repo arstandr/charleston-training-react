@@ -31,6 +31,7 @@ export const STORES = {
   },
 }
 export const SHIFT_TYPES = [
+  { key: 'host', label: 'Host shift (optional)', required: false },
   { key: 'follow', label: 'Follow shift', required: true },
   { key: 'rev1', label: '1st reverse', required: true },
   { key: 'rev2', label: '2nd reverse', required: true },
@@ -42,8 +43,28 @@ export const SHIFT_TYPES = [
 export const STAFF_ACCOUNTS_KEY = 'staffAccounts_v1'
 /** Required shift keys for certification (6 required; rev4 optional) */
 export const REQUIRED_SHIFT_KEYS = ['follow', 'rev1', 'rev2', 'rev3', 'foodrun', 'cert']
+/** The optional day-1 host shift. No trainer, no checklist, no test — completes on its own date. */
+export const HOST_SHIFT_KEY = 'host'
+/** Shifts the trainee works without a trainer assigned. */
+export const NO_TRAINER_SHIFT_KEYS = [HOST_SHIFT_KEY, 'foodrun']
+/** Whether a shift needs a trainer (or, for cert, a manager) assigned to it. */
+export function shiftNeedsTrainer(shiftKey) {
+  return !NO_TRAINER_SHIFT_KEYS.includes(shiftKey)
+}
+/** True when this trainee has a host shift on their plan. */
+export function hasHostShift(rec) {
+  return !!rec?.schedule?.[HOST_SHIFT_KEY]?.when
+}
+/**
+ * Shift keys that count toward this trainee's certification.
+ * The host shift is optional, so it only counts for trainees who were actually scheduled one.
+ */
+export function getRequiredShiftKeys(rec) {
+  return hasHostShift(rec) ? [HOST_SHIFT_KEY, ...REQUIRED_SHIFT_KEYS] : REQUIRED_SHIFT_KEYS
+}
 /** Shift metadata: label, icon, flashcard set id for trainee dashboard */
 export const SHIFT_META = {
+  host: { label: 'Host shift', icon: '🛎️', flashcardSetId: null },
   follow: { label: 'Follow shift', icon: '👣', flashcardSetId: 'starters-soups-salads' },
   rev1: { label: '1st reverse', icon: '🔁', flashcardSetId: 'steaks-specialties' },
   rev2: { label: '2nd reverse', icon: '🍺', flashcardSetId: 'bar-beer' },

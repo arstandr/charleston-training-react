@@ -10,11 +10,11 @@ import { useTrainingData } from '../hooks/useTrainingData'
 import { subscribeTraineeHealth } from '../services/healthService'
 import { loadTestResults } from '../services/quizAttemptsService'
 import { TESTS, PRETTY_TEST_NAMES } from '../data/quizDatabase'
-import { REQUIRED_SHIFT_KEYS } from '../constants'
+import { getRequiredShiftKeys } from '../constants'
 import { isShiftComplete } from '../utils/helpers'
 import { useStaffAccounts } from '../hooks/useStaffAccounts'
 
-const SHIFT_ORDER = ['follow', 'rev1', 'rev2', 'rev3', 'rev4', 'foodrun', 'cert']
+const SHIFT_ORDER = ['host', 'follow', 'rev1', 'rev2', 'rev3', 'rev4', 'foodrun', 'cert']
 
 /* ------------------------------------------------------------------ */
 /*  I-1: SimpleReadinessCard — local score, no AI                     */
@@ -23,8 +23,9 @@ function SimpleReadinessCard({ traineeId, trainingData, testResults }) {
   const rec = trainingData?.[traineeId]
 
   // Shift completion: what % of required shifts are complete (60% weight)
-  const completedShifts = REQUIRED_SHIFT_KEYS.filter((k) => rec && isShiftComplete(rec, k)).length
-  const shiftPct = REQUIRED_SHIFT_KEYS.length > 0 ? completedShifts / REQUIRED_SHIFT_KEYS.length : 0
+  const requiredShiftKeys = getRequiredShiftKeys(rec)
+  const completedShifts = requiredShiftKeys.filter((k) => rec && isShiftComplete(rec, k)).length
+  const shiftPct = requiredShiftKeys.length > 0 ? completedShifts / requiredShiftKeys.length : 0
 
   // Test results: what % of official tests are passed (40% weight)
   const officialTests = (TESTS || []).filter((t) => t.id !== 'bonus_test')
@@ -58,7 +59,7 @@ function SimpleReadinessCard({ traineeId, trainingData, testResults }) {
       <div className="grid grid-cols-2 gap-3 text-sm">
         <div className="rounded-lg bg-gray-50 p-3">
           <p className="text-gray-500 text-xs mb-1">Shifts completed</p>
-          <p className="font-bold text-gray-800">{completedShifts} / {REQUIRED_SHIFT_KEYS.length}</p>
+          <p className="font-bold text-gray-800">{completedShifts} / {requiredShiftKeys.length}</p>
         </div>
         <div className="rounded-lg bg-gray-50 p-3">
           <p className="text-gray-500 text-xs mb-1">Tests passed</p>

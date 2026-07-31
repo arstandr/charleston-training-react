@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { REQUIRED_SHIFT_KEYS, SHIFT_META } from '../constants'
+import { getRequiredShiftKeys, SHIFT_META } from '../constants'
 import { PRETTY_TEST_NAMES } from '../data/quizDatabase'
 import { getCertificationProgress, getShiftStatus, formatWhenHuman, getInitials } from '../utils/helpers'
 import { loadTestResults } from '../services/quizAttemptsService'
@@ -62,7 +62,7 @@ export default function ManagerTraineeDetailView({ traineeId, trainee, trainingD
   const testResults = extractTestResultsForTrainee(firestoreResults || testAttemptsProp || {}, traineeId)
   const notes = Array.isArray(rec.notes) ? rec.notes : []
 
-  const shiftRows = REQUIRED_SHIFT_KEYS.map((key) => {
+  const shiftRows = getRequiredShiftKeys(rec).map((key) => {
     const item = schedule[key]
     const status = getShiftStatus(rec, key)
     const meta = SHIFT_META[key] || { label: key }

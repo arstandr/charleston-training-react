@@ -19,7 +19,7 @@ import { useTestAttempts } from '../hooks/useTestAttempts'
 import { getTrainersByLocation } from '../services/trainerService'
 import { submitTrainerRating, updateTrainerRating, getExistingRating } from '../services/trainerRatingsService'
 import { useFlashcardMastery } from '../hooks/useFlashcardMastery'
-import { REQUIRED_SHIFT_KEYS, SHIFT_META, getStoreDisplayName } from '../constants'
+import { REQUIRED_SHIFT_KEYS, SHIFT_META, getRequiredShiftKeys, shiftNeedsTrainer, getStoreDisplayName } from '../constants'
 import { getAllFlashcardSets } from '../services/flashcardService'
 import {
   getCertificationProgress,
@@ -36,7 +36,7 @@ import { getPendingChecks } from '../services/postShiftCheckService'
 import { getVerbalCertPractice } from '../services/verbalCertPracticeService'
 import { logClientError } from '../services/errorLogger'
 
-const SHIFT_ORDER = ['follow', 'rev1', 'rev2', 'rev3', 'rev4', 'foodrun', 'cert']
+const SHIFT_ORDER = ['host', 'follow', 'rev1', 'rev2', 'rev3', 'rev4', 'foodrun', 'cert']
 
 export default function TraineeDashboard() {
   const navigate = useNavigate()
@@ -139,7 +139,7 @@ export default function TraineeDashboard() {
   const incompleteShifts = SHIFT_ORDER.filter((key) => {
     try { return rec?.schedule?.[key] && !isShiftComplete(rec, key) } catch (_) { return false }
   })
-  const completedShifts = REQUIRED_SHIFT_KEYS.filter((key) => {
+  const completedShifts = getRequiredShiftKeys(rec).filter((key) => {
     try { return rec && isShiftComplete(rec, key) } catch (_) { return false }
   })
   const shiftsRatable = SHIFT_ORDER.filter((key) => rec?.schedule?.[key]?.trainerSignedAt && rec?.schedule?.[key]?.trainer)
@@ -436,7 +436,7 @@ export default function TraineeDashboard() {
                     {nextShift.label}
                   </div>
                   <div className="mt-1 text-sm text-gray-600">{nextWhenStr}</div>
-                  {nextShift.key !== 'foodrun' && <div className="mt-0.5 text-sm text-gray-500">Trainer: {nextShift.trainerName}</div>}
+                  {shiftNeedsTrainer(nextShift.key) && <div className="mt-0.5 text-sm text-gray-500">Trainer: {nextShift.trainerName}</div>}
                   <div className="mt-2 flex flex-wrap gap-2">
                     <button
                       type="button"
@@ -758,9 +758,9 @@ export default function TraineeDashboard() {
                       >
                         <div>
                           <span className="font-medium text-gray-800">{meta.icon ? `${meta.icon} ` : ''}{meta.label}</span>
-                          <div className="text-sm text-gray-500">{key === 'foodrun' ? whenStr : `${whenStr} · ${trainerName}`}</div>
+                          <div className="text-sm text-gray-500">{shiftNeedsTrainer(key) ? `${whenStr} · ${trainerName}` : whenStr}</div>
                         </div>
-                        {key !== 'foodrun' && (
+                        {shiftNeedsTrainer(key) && (
                           <button
                             type="button"
                             className="btn btn-small"

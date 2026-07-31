@@ -1,10 +1,11 @@
 import { useState, useMemo, useRef, useEffect, forwardRef, useImperativeHandle } from 'react'
-import { SHIFT_TYPES, SHIFT_META } from '../constants'
+import { SHIFT_TYPES, SHIFT_META, HOST_SHIFT_KEY, shiftNeedsTrainer } from '../constants'
 
 const DEFAULT_TIME = '17:00' // fallback when no per-shift default
 const PRIMARY_GREEN = '#1F4D1C'
 
 const SHIFT_DEFAULT_TIMES = {
+  host: '16:00',
   follow: '10:00',
   rev1: '10:00',
   rev2: '16:00',
@@ -173,7 +174,7 @@ function autoAssignTrainers(localSchedule, trainers, managers, traineeId, allTra
   SHIFT_TYPES.forEach((shift) => {
     const item = newSchedule[shift.key]
     if (!item?.when || item.trainer) return
-    if (shift.key === 'foodrun') return
+    if (!shiftNeedsTrainer(shift.key)) return  // Host and food run are worked without a trainer
     if (shift.key === 'rev4') return  // Don't auto-assign optional 4th reverse
 
     if (shift.key === 'cert') {
@@ -206,6 +207,36 @@ function autoAssignTrainers(localSchedule, trainers, managers, traineeId, allTra
     }
   })
   return newSchedule
+}
+
+/** Shift keys in plan order, with the optional host shift dropped when it isn't being used. */
+function planShiftKeys(includeHost) {
+  return SHIFT_TYPES.map((s) => s.key).filter((k) => includeHost || k !== HOST_SHIFT_KEY)
+}
+
+/**
+ * Lay the plan out one shift per day starting from `startDateStr` (day 1).
+ * With the host shift it is an 8-day plan; without it the remaining shifts pull
+ * back a day each and it collapses to the original 7 days.
+ */
+function assignDatesFromStart(schedule, startDateStr, includeHost) {
+  const [y, m, d] = startDateStr.split('-').map(Number)
+  if (!y || !m || !d) return schedule
+  const out = { ...schedule }
+  planShiftKeys(includeHost).forEach((key, dayOffset) => {
+    const date = new Date(y, m - 1, d + dayOffset)
+    const datePart =
+      date.getFullYear() +
+      '-' +
+      String(date.getMonth() + 1).padStart(2, '0') +
+      '-' +
+      String(date.getDate()).padStart(2, '0')
+    const timePart = SHIFT_DEFAULT_TIMES[key]
+    const when = timePart ? datePart + 'T' + timePart + ':00' : datePart
+    out[key] = { ...(out[key] || {}), when }
+  })
+  if (!includeHost) out[HOST_SHIFT_KEY] = { ...(out[HOST_SHIFT_KEY] || {}), when: '' }
+  return out
 }
 
 function formatDayLabel(dateStr) {
@@ -301,20 +332,7 @@ const ScheduleEditor = forwardRef(function ScheduleEditor(
 
   function setStartDate(dateStr) {
     if (!dateStr) return
-    const [y, m, d] = dateStr.split('-').map(Number)
-    const withDates = { ...localSchedule }
-    SHIFT_TYPES.forEach((shift, dayOffset) => {
-      const date = new Date(y, m - 1, d + dayOffset)
-      const datePart =
-        date.getFullYear() +
-        '-' +
-        String(date.getMonth() + 1).padStart(2, '0') +
-        '-' +
-        String(date.getDate()).padStart(2, '0')
-      const timePart = SHIFT_DEFAULT_TIMES[shift.key]
-      const when = timePart ? datePart + 'T' + timePart + ':00' : datePart
-      withDates[shift.key] = { ...(withDates[shift.key] || {}), when }
-    })
+    const withDates = assignDatesFromStart(localSchedule, dateStr, true)
     const withTrainers = autoAssignTrainers(withDates, trainers, managers, traineeId, allTrainingData)
     setLocalSchedule(withTrainers)
     const manualNeeded = []
@@ -358,17 +376,19 @@ const ScheduleEditor = forwardRef(function ScheduleEditor(
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
+  const hostScheduled = !!localSchedule[HOST_SHIFT_KEY]?.when
+  const planDayCount = planShiftKeys(hostScheduled).length
   const firstWhen = SHIFT_TYPES.map((s) => localSchedule[s.key]?.when).find(Boolean)
   const weekStart = firstWhen ? new Date(firstWhen.split('T')[0]) : new Date()
-  const weekDates = Array.from({ length: 7 }, (_, i) => {
+  const weekDates = Array.from({ length: planDayCount }, (_, i) => {
     const d = new Date(weekStart)
     d.setDate(weekStart.getDate() + i)
     return d
   })
   const todayStr = new Date().toISOString().split('T')[0]
 
-  const assignedCount = SHIFT_TYPES.filter((s) => s.key !== 'foodrun' && localSchedule[s.key]?.trainer).length
-  const totalNeedingTrainer = SHIFT_TYPES.filter((s) => s.key !== 'foodrun' && s.key !== 'cert').length
+  const assignedCount = SHIFT_TYPES.filter((s) => shiftNeedsTrainer(s.key) && localSchedule[s.key]?.trainer).length
+  const totalNeedingTrainer = SHIFT_TYPES.filter((s) => shiftNeedsTrainer(s.key) && s.key !== 'cert').length
   const certCount = localSchedule.cert?.trainer ? 1 : 0
   const trainerSlots = totalNeedingTrainer + certCount
   const assignedTrainers = [...new Set(SHIFT_TYPES.map((s) => localSchedule[s.key]?.trainer).filter(Boolean))]
@@ -384,7 +404,7 @@ const ScheduleEditor = forwardRef(function ScheduleEditor(
   const followTrainer = trainers.find((t) => t.empNum === localSchedule.follow?.trainer)
   const notScheduledCount = SHIFT_TYPES.filter((s) => {
     const item = localSchedule[s.key]
-    if (!item?.when || !item?.trainer || s.key === 'foodrun') return false
+    if (!item?.when || !item?.trainer || !shiftNeedsTrainer(s.key)) return false
     const t = s.key === 'cert' ? managers.find((m) => m.empNum === item.trainer) : trainers.find((x) => x.empNum === item.trainer)
     const status = t && s.key !== 'cert' ? isTrainerAvailable(t, item.when) : { available: true }
     return !status.available && !status.noData
@@ -393,7 +413,7 @@ const ScheduleEditor = forwardRef(function ScheduleEditor(
   const doubleBookCount = (() => {
     let count = 0
     SHIFT_TYPES.forEach((s) => {
-      if (s.key === 'foodrun' || !localSchedule[s.key]?.when || !localSchedule[s.key]?.trainer) return
+      if (!shiftNeedsTrainer(s.key) || !localSchedule[s.key]?.when || !localSchedule[s.key]?.trainer) return
       const doubleBooked = getDoubleBookedTrainers(localSchedule[s.key].when, traineeId, allTrainingData)
       if (doubleBooked[localSchedule[s.key].trainer]) count++
     })
@@ -405,7 +425,7 @@ const ScheduleEditor = forwardRef(function ScheduleEditor(
     (() => {
       const first = new Date(firstWhen)
       const last = new Date(first)
-      last.setDate(last.getDate() + SHIFT_TYPES.length - 1)
+      last.setDate(last.getDate() + planDayCount - 1)
       return (
         first.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
         ' – ' +
@@ -474,10 +494,10 @@ const ScheduleEditor = forwardRef(function ScheduleEditor(
             const dots = SHIFT_TYPES.map((s) => {
               const item = localSchedule[s.key]
               const hasDate = item?.when && item.when.startsWith(dateStr)
-              const hasTrainer = item?.trainer && s.key !== 'foodrun'
-              const isFoodRun = s.key === 'foodrun'
+              const needsTrainer = shiftNeedsTrainer(s.key)
+              const hasTrainer = item?.trainer && needsTrainer
               let color = 'bg-gray-300'
-              if (hasDate && isFoodRun) color = 'bg-gray-400'
+              if (hasDate && !needsTrainer) color = 'bg-gray-400'
               else if (hasDate && hasTrainer) color = 'bg-green-500'
               else if (hasDate) color = 'bg-amber-500'
               return <div key={s.key} className={`h-1.5 w-1.5 rounded-full ${color}`} title={SHIFT_META[s.key]?.label} />
@@ -501,15 +521,19 @@ const ScheduleEditor = forwardRef(function ScheduleEditor(
           const item = localSchedule[s.key] || {}
           const meta = SHIFT_META[s.key] || {}
           const isCert = s.key === 'cert'
-          const isFoodRun = s.key === 'foodrun'
+          const isHost = s.key === HOST_SHIFT_KEY
+          const needsTrainer = shiftNeedsTrainer(s.key)
           const hasDate = !!item.when
           const hasTrainer = !!item.trainer
           const selectedTrainer = isCert ? managers.find((m) => m.empNum === item.trainer) : trainers.find((t) => t.empNum === item.trainer)
           const availability = selectedTrainer && !isCert ? isTrainerAvailable(selectedTrainer, item.when) : { available: true }
-          const doubleBookedForThis = hasDate && hasTrainer && !isFoodRun && getDoubleBookedTrainers(item.when, traineeId, allTrainingData)[item.trainer]
-          let statusBadge = !hasDate ? '📅 Set date' : !hasTrainer && !isFoodRun ? '🔍 Needs trainer' : doubleBookedForThis ? '🚫 Double-booked' : availability.available ? '✅ Confirmed' : availability.noData ? '📋 No schedule data' : '⚠️ Trainer off'
-          let borderColor = !hasDate ? 'border-gray-200' : !hasTrainer && !isFoodRun ? 'border-red-300' : doubleBookedForThis ? 'border-red-400' : availability.available ? 'border-green-500' : 'border-amber-400'
+          const doubleBookedForThis = hasDate && hasTrainer && needsTrainer && getDoubleBookedTrainers(item.when, traineeId, allTrainingData)[item.trainer]
+          let statusBadge = !hasDate ? '📅 Set date' : !hasTrainer && needsTrainer ? '🔍 Needs trainer' : doubleBookedForThis ? '🚫 Double-booked' : availability.available ? '✅ Confirmed' : availability.noData ? '📋 No schedule data' : '⚠️ Trainer off'
+          let borderColor = !hasDate ? 'border-gray-200' : !hasTrainer && needsTrainer ? 'border-red-300' : doubleBookedForThis ? 'border-red-400' : availability.available ? 'border-green-500' : 'border-amber-400'
           const isOptional = s.required === false
+          // Day number reflects the plan as laid out — without a host shift, Follow is day 1 again.
+          const planIdx = planShiftKeys(hostScheduled).indexOf(s.key)
+          const dayNumber = planIdx >= 0 ? planIdx + 1 : idx + 1
 
           return (
             <div
@@ -523,7 +547,7 @@ const ScheduleEditor = forwardRef(function ScheduleEditor(
                     className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-bold"
                     style={{ backgroundColor: `${PRIMARY_GREEN}20`, color: PRIMARY_GREEN }}
                   >
-                    {isCert ? '🎓' : isFoodRun ? '🍽️' : idx + 1}
+                    {isCert ? '🎓' : s.key === 'foodrun' ? '🍽️' : dayNumber}
                   </span>
                   <div>
                     <div className="font-bold text-gray-800">
@@ -547,6 +571,23 @@ const ScheduleEditor = forwardRef(function ScheduleEditor(
                     value={(item.when || '').slice(0, 10)}
                     onChange={(e) => {
                       const datePart = e.target.value
+                      // The host shift is day 1 of the plan. Adding it pushes the rest out a day;
+                      // clearing it pulls them back so the plan collapses to its original 7 days.
+                      if (s.key === HOST_SHIFT_KEY) {
+                        const hadDate = !!(item.when || '').slice(0, 10)
+                        if (!datePart && hadDate) {
+                          setLocalSchedule((prev) => assignDatesFromStart(prev, (item.when || '').slice(0, 10), false))
+                          setToastMessage('✅ Host shift removed — plan collapsed back to 7 days')
+                          setTimeout(() => setToastMessage(null), 5000)
+                          return
+                        }
+                        if (datePart && !hadDate) {
+                          setLocalSchedule((prev) => assignDatesFromStart(prev, datePart, true))
+                          setToastMessage('✅ Host shift added as day 1 — plan is now 8 days')
+                          setTimeout(() => setToastMessage(null), 5000)
+                          return
+                        }
+                      }
                       const timePart = item.when?.includes('T') ? item.when.slice(11, 16) : (SHIFT_DEFAULT_TIMES[s.key] || DEFAULT_TIME)
                       const when = datePart ? (timePart ? datePart + 'T' + timePart + ':00' : datePart) : ''
                       setShift(s.key, 'when', when)
@@ -586,8 +627,10 @@ const ScheduleEditor = forwardRef(function ScheduleEditor(
                   />
                 </div>
 
-                {isFoodRun ? (
-                  <div className="flex min-h-[44px] items-center rounded-lg bg-gray-100 px-4 text-sm text-gray-500">No Trainer Needed</div>
+                {!needsTrainer ? (
+                  <div className="flex min-h-[44px] items-center rounded-lg bg-gray-100 px-4 text-sm text-gray-500">
+                    {isHost ? 'No Trainer, Checklist, or Test' : 'No Trainer Needed'}
+                  </div>
                 ) : isCert ? (
                   <div className="min-w-[200px]">
                     <label className="mb-1 block text-xs font-medium text-gray-500">Manager</label>
@@ -728,7 +771,7 @@ const ScheduleEditor = forwardRef(function ScheduleEditor(
       <div className="mt-8 rounded-xl border border-gray-200 bg-gray-50 p-4">
         <div className="mb-4 font-semibold text-gray-800">Training Plan Summary</div>
         <ul className="space-y-1 text-sm text-gray-600">
-          {dateRangeStr && <li>📅 {dateRangeStr} (7 days)</li>}
+          {dateRangeStr && <li>📅 {dateRangeStr} ({planDayCount} days)</li>}
           <li>✅ {assignedCount}/{trainerSlots} trainers assigned</li>
           <li>⭐ Avg trainer rating: {avgRating}</li>
           {followTrainer && <li>🔄 {followTrainer.name}: Follow + 3rd Reverse</li>}

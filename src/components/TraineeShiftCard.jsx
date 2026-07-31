@@ -1,4 +1,4 @@
-import { SHIFT_META } from '../constants'
+import { SHIFT_META, HOST_SHIFT_KEY, shiftNeedsTrainer } from '../constants'
 import { formatWhenHuman, getShiftStatus, isShiftComplete, getShiftRequiredTestIds } from '../utils/helpers'
 import { PRETTY_TEST_NAMES } from '../data/quizDatabase'
 
@@ -33,6 +33,8 @@ export default function TraineeShiftCard({
   })
   const hasTests = testStatuses.length > 0
   const anyFailed = hasTests && testStatuses.some((t) => t.count > 0 && !t.passed)
+  // Host shift: worked solo, no trainer to sit with and nothing to test on.
+  const isHost = shiftKey === HOST_SHIFT_KEY
 
   // Determine if the shift date is in the future
   const isFutureShift = (() => {
@@ -77,7 +79,7 @@ export default function TraineeShiftCard({
             {meta.label}
           </div>
           <div className="mt-1 text-sm text-gray-600">{whenStr}</div>
-          <div className="mt-0.5 text-sm text-gray-500">Trainer: {trainerName}</div>
+          {shiftNeedsTrainer(shiftKey) && <div className="mt-0.5 text-sm text-gray-500">Trainer: {trainerName}</div>}
           {hasTests && (
             <div className="mt-2 space-y-1">
               {testStatuses.map((t) => (
@@ -105,26 +107,30 @@ export default function TraineeShiftCard({
                 Flashcards
               </button>
             )}
-            <button
-              type="button"
-              className="btn btn-small text-sm"
-              onClick={() => onPracticeTest?.(shiftKey)}
-              disabled={!onPracticeTest}
-            >
-              Practice Test
-            </button>
-            <button
-              type="button"
-              className="btn btn-small text-sm"
-              onClick={() => onTest?.(shiftKey)}
-              disabled={!onTest}
-            >
-              Test
-            </button>
+            {!isHost && (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-small text-sm"
+                  onClick={() => onPracticeTest?.(shiftKey)}
+                  disabled={!onPracticeTest}
+                >
+                  Practice Test
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-small text-sm"
+                  onClick={() => onTest?.(shiftKey)}
+                  disabled={!onTest}
+                >
+                  Test
+                </button>
+              </>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {onViewDetail && (
+          {onViewDetail && !isHost && (
             <button type="button" className="btn btn-small" onClick={() => onViewDetail(shiftKey)}>
               Sign off
             </button>
