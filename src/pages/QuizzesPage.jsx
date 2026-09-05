@@ -10,7 +10,7 @@ import { useQuizAttempts } from '../hooks/useQuizAttempts'
 import { analyzeQuizResults } from '../services/quizIntelligenceService'
 import QuizPerformanceInsights from '../components/QuizPerformanceInsights'
 import { useFlashcardMastery } from '../hooks/useFlashcardMastery'
-import { getSocraticHint, getExamHint } from '../services/ai'
+import { getSocraticHint } from '../services/ai'
 import { tryAcquireLock, releaseLock } from '../services/testLock'
 import { useTestLock } from '../contexts/TestLockContext'
 import { celebratePerfectScore } from '../utils/celebrations'
@@ -225,8 +225,6 @@ export default function QuizzesPage() {
   const [eliminatedOptions, setEliminatedOptions] = useState(new Set())
   const [socraticHint, setSocraticHint] = useState(null)
   const [socraticLoading, setSocraticLoading] = useState(false)
-  const [examHint, setExamHint] = useState(null)
-  const [examHintLoading, setExamHintLoading] = useState(false)
   const [lockError, setLockError] = useState(null)
   const [loadingNextPractice, setLoadingNextPractice] = useState(false)
   const [loadingOfficialStart, setLoadingOfficialStart] = useState(false)
@@ -745,7 +743,6 @@ export default function QuizzesPage() {
 
   const handleNext = () => {
     setSocraticHint(null)
-    setExamHint(null)
     setEliminatedOptions(new Set())
     setFlagPromptOpen(false)
     setFlagReason('')
@@ -814,26 +811,6 @@ export default function QuizzesPage() {
       setSocraticHint('Unable to load hint. Try "Guide Me" to eliminate a wrong answer.')
     } finally {
       setSocraticLoading(false)
-    }
-  }
-
-  const requestExamHint = async () => {
-    if (sessionState.showResult || examHintLoading || !currentQ) return
-    if (hintsRemaining != null && hintsRemaining <= 0) {
-      alert('No hints remaining')
-      return
-    }
-    setExamHint(null)
-    setExamHintLoading(true)
-    try {
-      const correctAnswer = (currentQ.opts || [])[currentQ.ans]
-      const hint = await getExamHint(currentQ.q, correctAnswer ?? '')
-      setExamHint(hint)
-      if (hintsRemaining != null) setHintsRemaining((h) => Math.max(0, (h ?? 0) - 1))
-    } catch (e) {
-      setExamHint('Unable to load hint. Please try again.')
-    } finally {
-      setExamHintLoading(false)
     }
   }
 
@@ -1354,23 +1331,19 @@ export default function QuizzesPage() {
           )}
           <p className="mb-4 font-medium text-gray-800">{currentQ.q}</p>
           {mode === 'official' ? (
-            <div className="mb-4 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                className="min-h-[44px] px-4 py-2 rounded-lg border border-[var(--color-primary)] text-sm text-[var(--color-primary)] font-medium hover:bg-green-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                onClick={requestExamHint}
-                disabled={showExplanation || examHintLoading || (hintsRemaining != null && hintsRemaining <= 0)}
-              >
-                {examHintLoading ? (
-                  <>
-                    <span className="inline-block w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin mr-1.5 align-middle" aria-hidden />
-                    <span>Loading…</span>
-                  </>
-                ) : (
-                  `💡 Get a Hint (${hintsRemaining ?? 0} remaining)`
-                )}
-              </button>
-            </div>
+            (hintsRemaining === null || hintsRemaining > 0) && (
+              <div className="mb-4 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  className="min-h-[44px] px-4 py-2 rounded-lg border border-[var(--color-primary)] text-sm text-[var(--color-primary)] font-medium hover:bg-green-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  onClick={useHint}
+                  disabled={showExplanation}
+                  title="Eliminates one wrong answer — official tests don't offer AI-guided hints"
+                >
+                  💡 Eliminate a wrong answer ({hintsRemaining ?? 0} left)
+                </button>
+              </div>
+            )
           ) : (
             (hintsRemaining === null || hintsRemaining > 0) && (
               <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -1380,7 +1353,7 @@ export default function QuizzesPage() {
                   onClick={useHint}
                   disabled={showExplanation}
                 >
-                  💡 Eliminate wrong answer
+                  💡 Eliminate an answer
                 </button>
                 <button
                   type="button"
@@ -1388,15 +1361,10 @@ export default function QuizzesPage() {
                   onClick={requestSocraticHint}
                   disabled={showExplanation || socraticLoading}
                 >
-                  {socraticLoading ? '…' : '💬 AI hint'}
+                  {socraticLoading ? '…' : '💬 Ask for a hint'}
                 </button>
               </div>
             )
-          )}
-          {examHint && mode === 'official' && (
-            <div className="mb-4 rounded-lg bg-amber-50 border border-amber-300 p-3 text-sm text-amber-900" role="alert">
-              <strong>Hint:</strong> {examHint}
-            </div>
           )}
           {socraticHint && mode === 'practice' && (
             <div className="mb-4 rounded-lg bg-blue-50 border border-blue-200 p-3 text-sm text-gray-800">
