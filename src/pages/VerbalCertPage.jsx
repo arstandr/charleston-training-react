@@ -5,6 +5,7 @@ import { getFromFirestore } from '../utils/firestore'
 import { createVerbalCertification } from '../services/verbalCertService'
 import { closeOutCertification } from '../services/certSignOff'
 import CertificationReview from '../components/CertificationReview'
+import VerbalCertAnswerReveal from '../components/VerbalCertAnswerReveal'
 import {
   PHASE1_TRAINING,
   PHASE2_LOCAL_OPTIONS,
@@ -13,6 +14,7 @@ import {
   PHASE5_SERVICE,
   TOTAL_POSSIBLE,
 } from '../data/verbalCertQuestions'
+import { PHASE2_ANSWERS, PHASE3_ANSWERS, PHASE4_ANSWERS } from '../data/verbalCertAnswers'
 
 export default function VerbalCertPage() {
   const { traineeId } = useParams()
@@ -37,6 +39,7 @@ export default function VerbalCertPage() {
   const [phase4Scores, setPhase4Scores] = useState({})
   const [phase5Scores, setPhase5Scores] = useState({})
   const [phase4Step, setPhase4Step] = useState(0)
+  const [expandedAnswers, setExpandedAnswers] = useState({})
   const [reviewNotes, setReviewNotes] = useState('')
   const [outcome, setOutcome] = useState('certified')
   const [retrainAreas, setRetrainAreas] = useState([])
@@ -247,39 +250,66 @@ export default function VerbalCertPage() {
             <p className="text-sm text-gray-600 dark:text-gray-400">Tap thumbs up or down for each item (1 pt each, max {PHASE2_LOCAL_OPTIONS.maxScore})</p>
             {PHASE2_LOCAL_OPTIONS.questions.map((q, idx) => {
               const val = phase2Scores[idx]
+              const answer = PHASE2_ANSWERS[q]
+              const key = `p2-${idx}`
+              const isOpen = !!expandedAnswers[key]
               return (
-                <div key={idx} className="flex items-center gap-3 p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600">
-                  <span className="text-sm text-gray-800 dark:text-gray-200 flex-1">{q}</span>
-                  <div className="flex gap-1">
-                    <button
-                      type="button"
-                      className={`px-3 py-1.5 rounded-lg text-lg transition-colors ${val === 0 ? 'bg-red-100 ring-2 ring-red-400' : 'bg-gray-100 hover:bg-red-50'}`}
-                      onClick={() => {
-                        setPhase2Scores((prev) => {
-                          const next = { ...prev, [idx]: 0 }
-                          setScores((s) => ({ ...s, phase2: Object.values(next).reduce((a, b) => a + b, 0) }))
-                          return next
-                        })
-                      }}
-                      aria-label="Fail"
-                    >
-                      👎
-                    </button>
-                    <button
-                      type="button"
-                      className={`px-3 py-1.5 rounded-lg text-lg transition-colors ${val === 1 ? 'bg-green-100 ring-2 ring-green-400' : 'bg-gray-100 hover:bg-green-50'}`}
-                      onClick={() => {
+                <div key={idx} className="p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600">
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm text-gray-800 dark:text-gray-200 flex-1">{q}</span>
+                    {answer && (
+                      <button
+                        type="button"
+                        onClick={() => setExpandedAnswers((prev) => ({ ...prev, [key]: !prev[key] }))}
+                        className="text-xs font-semibold text-amber-700 dark:text-amber-400 hover:underline shrink-0"
+                      >
+                        {isOpen ? 'Hide answer' : 'Show answer'}
+                      </button>
+                    )}
+                    <div className="flex gap-1">
+                      <button
+                        type="button"
+                        className={`px-3 py-1.5 rounded-lg text-lg transition-colors ${val === 0 ? 'bg-red-100 ring-2 ring-red-400' : 'bg-gray-100 hover:bg-red-50'}`}
+                        onClick={() => {
+                          setPhase2Scores((prev) => {
+                            const next = { ...prev, [idx]: 0 }
+                            setScores((s) => ({ ...s, phase2: Object.values(next).reduce((a, b) => a + b, 0) }))
+                            return next
+                          })
+                        }}
+                        aria-label="Fail"
+                      >
+                        👎
+                      </button>
+                      <button
+                        type="button"
+                        className={`px-3 py-1.5 rounded-lg text-lg transition-colors ${val === 1 ? 'bg-green-100 ring-2 ring-green-400' : 'bg-gray-100 hover:bg-green-50'}`}
+                        onClick={() => {
+                          setPhase2Scores((prev) => {
+                            const next = { ...prev, [idx]: 1 }
+                            setScores((s) => ({ ...s, phase2: Object.values(next).reduce((a, b) => a + b, 0) }))
+                            return next
+                          })
+                        }}
+                        aria-label="Pass"
+                      >
+                        👍
+                      </button>
+                    </div>
+                  </div>
+                  {isOpen && (
+                    <VerbalCertAnswerReveal
+                      answer={answer}
+                      onComplete={(allChecked) => {
+                        if (!allChecked) return
                         setPhase2Scores((prev) => {
                           const next = { ...prev, [idx]: 1 }
                           setScores((s) => ({ ...s, phase2: Object.values(next).reduce((a, b) => a + b, 0) }))
                           return next
                         })
                       }}
-                      aria-label="Pass"
-                    >
-                      👍
-                    </button>
-                  </div>
+                    />
+                  )}
                 </div>
               )
             })}
@@ -297,22 +327,45 @@ export default function VerbalCertPage() {
                   {cat.items.map((item, iIdx) => {
                     const key = `${cIdx}-${iIdx}`
                     const checked = phase3Checked[key]
+                    const answer = PHASE3_ANSWERS[item]
+                    const answerKey = `p3-${key}`
+                    const isOpen = !!expandedAnswers[answerKey]
+                    function markChecked(value) {
+                      const next = { ...phase3Checked, [key]: value }
+                      setPhase3Checked(next)
+                      const count = Object.values(next).filter(Boolean).length
+                      const raw = count * PHASE3_FOOD_MENU.pointsPerItem
+                      setScores((s) => ({ ...s, phase3: Math.min(raw, PHASE3_FOOD_MENU.targetScore) }))
+                    }
                     return (
-                      <label key={key} className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={!!checked}
-                          onChange={(e) => {
-                            const next = { ...phase3Checked, [key]: e.target.checked }
-                            setPhase3Checked(next)
-                            const count = Object.values(next).filter(Boolean).length
-                            const raw = count * PHASE3_FOOD_MENU.pointsPerItem
-                            setScores((s) => ({ ...s, phase3: Math.min(raw, PHASE3_FOOD_MENU.targetScore) }))
-                          }}
-                          className="rounded"
-                        />
-                        <span className="text-sm text-gray-800 dark:text-gray-200">{item}</span>
-                      </label>
+                      <div key={key}>
+                        <div className="flex items-center gap-2">
+                          <label className="flex items-center gap-2 flex-1">
+                            <input
+                              type="checkbox"
+                              checked={!!checked}
+                              onChange={(e) => markChecked(e.target.checked)}
+                              className="rounded"
+                            />
+                            <span className="text-sm text-gray-800 dark:text-gray-200">{item}</span>
+                          </label>
+                          {answer && (
+                            <button
+                              type="button"
+                              onClick={() => setExpandedAnswers((prev) => ({ ...prev, [answerKey]: !prev[answerKey] }))}
+                              className="text-xs font-semibold text-amber-700 dark:text-amber-400 hover:underline shrink-0"
+                            >
+                              {isOpen ? 'Hide answer' : 'Show answer'}
+                            </button>
+                          )}
+                        </div>
+                        {isOpen && (
+                          <VerbalCertAnswerReveal
+                            answer={answer}
+                            onComplete={(allChecked) => { if (allChecked) markChecked(true) }}
+                          />
+                        )}
+                      </div>
                     )
                   })}
                 </div>
@@ -341,11 +394,39 @@ export default function VerbalCertPage() {
             {/* Current item card */}
             {(() => {
               const item = PHASE4_BAR.items[phase4Step]
+              const answer = PHASE4_ANSWERS[item.text]
+              const answerKey = `p4-${phase4Step}`
+              const isOpen = !!expandedAnswers[answerKey]
+              function setPoints(val) {
+                setPhase4Scores((prev) => {
+                  const next = { ...prev, [phase4Step]: val }
+                  const total = PHASE4_BAR.items.reduce((sum, it, i) => sum + (Number(next[i]) || 0), 0)
+                  setScores((s) => ({ ...s, phase4: total }))
+                  return next
+                })
+              }
               return (
                 <div className="rounded-xl border-2 border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 p-5 shadow-sm">
-                  <p className="font-bold text-gray-800 dark:text-white mb-1">{item.text}</p>
+                  <div className="flex items-start justify-between gap-3 mb-1">
+                    <p className="font-bold text-gray-800 dark:text-white">{item.text}</p>
+                    {answer && (
+                      <button
+                        type="button"
+                        onClick={() => setExpandedAnswers((prev) => ({ ...prev, [answerKey]: !prev[answerKey] }))}
+                        className="text-xs font-semibold text-amber-700 dark:text-amber-400 hover:underline shrink-0"
+                      >
+                        {isOpen ? 'Hide answer' : 'Show answer'}
+                      </button>
+                    )}
+                  </div>
                   <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">Worth {item.points} pts</p>
-                  <div className="flex items-center gap-3">
+                  {isOpen && (
+                    <VerbalCertAnswerReveal
+                      answer={answer}
+                      onComplete={(allChecked) => { if (allChecked) setPoints(item.points) }}
+                    />
+                  )}
+                  <div className="flex items-center gap-3 mt-4">
                     <input
                       type="number"
                       min={0}
@@ -353,13 +434,7 @@ export default function VerbalCertPage() {
                       value={phase4Scores[phase4Step] ?? ''}
                       onChange={(e) => {
                         const v = parseInt(e.target.value, 10)
-                        const val = isNaN(v) ? 0 : v
-                        setPhase4Scores((prev) => {
-                          const next = { ...prev, [phase4Step]: val }
-                          const total = PHASE4_BAR.items.reduce((sum, it, i) => sum + (Number(next[i]) || 0), 0)
-                          setScores((s) => ({ ...s, phase4: total }))
-                          return next
-                        })
+                        setPoints(isNaN(v) ? 0 : v)
                       }}
                       className="w-20 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
                     />
