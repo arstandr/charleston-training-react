@@ -8,6 +8,7 @@ import { doc, setDoc, collection, query, where, getDocs } from 'firebase/firesto
 import { db } from '../firebase'
 import { STORE_TO_TOAST_GUID } from '../constants'
 import { logClientError } from './errorLogger'
+import { authFetch } from '../utils/authFetch'
 
 /**
  * Allowed role values for staffAccounts entries.
@@ -33,7 +34,7 @@ export async function ensureToastToken() {
     if (token && Date.now() < expires) return token
   } catch (_) {}
 
-  const res = await fetch(`${API_BASE}/toastAuth`, {
+  const res = await authFetch(`${API_BASE}/toastAuth`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({}),

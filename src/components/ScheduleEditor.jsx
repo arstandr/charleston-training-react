@@ -335,8 +335,9 @@ const ScheduleEditor = forwardRef(function ScheduleEditor(
     const withDates = assignDatesFromStart(localSchedule, dateStr, true)
     const withTrainers = autoAssignTrainers(withDates, trainers, managers, traineeId, allTrainingData)
     setLocalSchedule(withTrainers)
+    // Food Run has no trainer picker (worked without a trainer, like Host) — don't
+    // nudge the manager to manually assign one, there's no UI control to do it.
     const manualNeeded = []
-    if (!withTrainers.foodrun?.trainer) manualNeeded.push('Food Run')
     if (!withTrainers.cert?.trainer) manualNeeded.push('Cert')
     const manualNote = manualNeeded.length > 0 ? ` · Manually assign: ${manualNeeded.join(', ')}` : ''
     setToastMessage(`✅ Dates set and trainers auto-assigned${manualNote}`)
@@ -348,9 +349,9 @@ const ScheduleEditor = forwardRef(function ScheduleEditor(
     setLocalSchedule(newSchedule)
     const followTrainer = trainers.find((t) => t.empNum === newSchedule.follow?.trainer)
     const followName = followTrainer?.name || 'Follow trainer'
-    // Build a clear message about what's still unassigned
+    // Build a clear message about what's still unassigned. Food Run has no
+    // trainer picker (worked without a trainer, like Host) — never nudge for it.
     const manualNeeded = []
-    if (!newSchedule.foodrun?.trainer) manualNeeded.push('Food Run')
     if (!newSchedule.cert?.trainer) manualNeeded.push('Cert')
     const manualNote = manualNeeded.length > 0 ? ` · Manually assign: ${manualNeeded.join(', ')}` : ''
     setToastMessage(`✅ Trainers auto-assigned — ${followName} gets Follow + 3rd Reverse${manualNote}`)

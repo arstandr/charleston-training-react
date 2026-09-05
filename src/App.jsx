@@ -70,7 +70,20 @@ class ErrorBoundary extends Component {
   componentDidCatch(error, errorInfo) {
     console.error('ErrorBoundary caught:', error, errorInfo)
     if (isChunkLoadError(error)) {
-      window.location.reload()
+      // Once-guard: a permanently broken chunk (bad deploy) must not reload forever.
+      let alreadyTried = false
+      try { alreadyTried = sessionStorage.getItem('ct_chunk_reload_attempted') === '1' } catch (_) {}
+      if (!alreadyTried) {
+        try { sessionStorage.setItem('ct_chunk_reload_attempted', '1') } catch (_) {}
+        window.location.reload()
+        return
+      }
+      // Already retried once this tab session and still failing — stop looping,
+      // fall through to the manual "Refresh Page" button instead.
+      this.setState({ isChunkError: false })
+      logClientError('general', 'chunk-load-persistent-failure', error, {
+        componentStack: errorInfo?.componentStack?.substring(0, 500) || null,
+      })
       return
     }
     logClientError('general', 'react-render-crash', error, {

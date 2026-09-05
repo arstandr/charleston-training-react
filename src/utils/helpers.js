@@ -1,4 +1,4 @@
-import { REQUIRED_SHIFT_KEYS, SHIFT_META, HOST_SHIFT_KEY, getRequiredShiftKeys } from '../constants'
+import { REQUIRED_SHIFT_KEYS, SHIFT_META, HOST_SHIFT_KEY, getRequiredShiftKeys, shiftNeedsTrainer } from '../constants'
 import { SHIFT_TEST_RULES, TESTS, PRETTY_TEST_NAMES } from '../data/quizDatabase'
 import { analyzeTraineeRisk } from './RiskEngine'
 import { getRequiredItemIds } from '../data/shiftChecklistTemplates'
@@ -128,6 +128,8 @@ function shiftWhenMs(when) {
  * Shift is complete when trainer + manager signed and all required tests passed.
  * The host shift is the exception — no trainer sits with the trainee and there is no test,
  * so it completes on its own once the scheduled time has passed.
+ * Other no-trainer shifts (e.g. foodrun) have no trainer picker in the UI at all, so
+ * they only require a manager sign-off, never trainerSignedAt.
  */
 export function isShiftComplete(rec, shiftKey, explicitTraineeId) {
   if (!rec?.schedule?.[shiftKey]) return false
@@ -136,7 +138,11 @@ export function isShiftComplete(rec, shiftKey, explicitTraineeId) {
     const ms = shiftWhenMs(item.when)
     return ms != null && Date.now() >= ms
   }
-  if (!item.trainerSignedAt || !item.managerSignedAt) return false
+  if (shiftNeedsTrainer(shiftKey)) {
+    if (!item.trainerSignedAt || !item.managerSignedAt) return false
+  } else {
+    if (!item.managerSignedAt) return false
+  }
   const traineeId = explicitTraineeId || rec.id || rec.traineeId
   const ids = getShiftRequiredTestIds(shiftKey, traineeId)
   if (ids.length === 0) return true
@@ -732,7 +738,8 @@ export function signShiftAsManager(trainingData, traineeId, shiftKey, managerEmp
   const next = JSON.parse(JSON.stringify(trainingData || {}))
   const rec = next[traineeId]
   const item = rec?.schedule?.[shiftKey]
-  if (!item || !item.trainerSignedAt) return trainingData
+  if (!item) return trainingData
+  if (shiftNeedsTrainer(shiftKey) && !item.trainerSignedAt) return trainingData
   rec.checklists = rec.checklists || {}
   rec.checklists[shiftKey] = rec.checklists[shiftKey] || {}
   if (readiness && typeof readiness === 'object') {

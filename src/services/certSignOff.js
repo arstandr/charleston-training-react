@@ -1,18 +1,17 @@
-import { saveToFirestore } from '../utils/firestore'
+import { httpsCallable, getFunctions } from 'firebase/functions'
+import { app } from '../firebase'
 
 /**
- * Close out a verbal certification against the trainee's own doc.
+ * Close out a verbal certification. Thin wrapper around the certifyTraineeCert
+ * Cloud Function — the callable checks the caller's role from their own custom
+ * claims and performs the write server-side, so a trainer can no longer forge a
+ * certification straight through Firestore rules.
  *
- * Writes are merge:true, so the nested `schedule.cert` map is deep-merged and
- * the other five shifts are left alone.
- *
- * On a pass this is what actually completes training — before this existed,
- * the `cert` shift was never signed, so trainees sat at 5/6 forever.
+ * certifierEmpNum/certifierUid are no longer read from here — the server derives
+ * both from the authenticated caller.
  */
 export async function closeOutCertification({
   traineeId,
-  certifierEmpNum,
-  certifierUid,
   outcome,
   totalScore,
   maxScore,
@@ -20,60 +19,19 @@ export async function closeOutCertification({
   retrainAreas = [],
   archiveOnCertify = true,
 }) {
-  const now = new Date().toISOString()
-  const passed = outcome === 'certified'
-
-  const attempt = {
-    result: passed ? 'pass' : 'fail',
-    at: now,
-    by: String(certifierEmpNum || ''),
-    totalScore,
-    maxScore,
-    notes: reviewNotes || '',
-    ...(passed ? {} : { retrainAreas }),
-  }
-
-  const payload = {
-    verbalCert: {
-      completed: passed,
-      completedAt: passed ? now : null,
-      completedBy: passed ? String(certifierEmpNum || '') : null,
-      certifiedBy: certifierUid || '',
-      lastAttemptAt: now,
+  const fn = httpsCallable(getFunctions(app), 'certifyTraineeCert')
+  try {
+    const result = await fn({
+      traineeId,
       outcome,
       totalScore,
       maxScore,
-      notes: reviewNotes || '',
-      retrainAreas: passed ? [] : retrainAreas,
-    },
-    updatedAt: now,
+      reviewNotes,
+      retrainAreas,
+      archiveOnCertify,
+    })
+    return result.data?.attempt
+  } catch (e) {
+    throw new Error(e?.message || 'Could not write the certification to the trainee record. Nothing was saved — try again.')
   }
-
-  if (passed) {
-    // Sign the Certification shift both ways — the certifying manager is the
-    // one in the room, so they satisfy the trainer signature too.
-    payload.schedule = {
-      cert: {
-        trainerSignedAt: now,
-        trainerSignedBy: String(certifierEmpNum || ''),
-        managerSignedAt: now,
-        managerSignedBy: String(certifierEmpNum || ''),
-      },
-    }
-    if (archiveOnCertify) {
-      payload.archived = true
-      payload.archivedReason = 'certified'
-      payload.archivedAt = now
-    }
-  }
-
-  // saveToFirestore swallows non-retryable errors and returns false rather than
-  // throwing. Without this check a permission-denied write would still show
-  // "certified successfully" and leave the trainee stuck at 5/6 — the exact
-  // limbo this flow exists to prevent.
-  const ok = await saveToFirestore('trainees', traineeId, payload)
-  if (!ok) {
-    throw new Error('Could not write the certification to the trainee record. Nothing was saved — try again.')
-  }
-  return attempt
 }

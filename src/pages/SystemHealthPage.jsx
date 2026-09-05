@@ -162,6 +162,7 @@ function FlashcardHealthCard({ reloadTrigger = 0, onRefresh, onToast }) {
   )
 }
 import { useAuth } from '../contexts/AuthContext'
+import { authFetch } from '../utils/authFetch'
 import AppHeader from '../components/AppHeader'
 import OwnerNavBar from '../components/OwnerNavBar'
 import GeminiConfigModal from '../components/GeminiConfigModal'
@@ -646,7 +647,7 @@ export default function SystemHealthPage() {
       let geminiLive = { status: hasGeminiKey ? 'healthy' : 'warning', message: hasGeminiKey ? 'API key configured' : 'No API key configured' }
       if (hasGeminiKey) {
         try {
-          const res = await fetch(`${FUNCTIONS_BASE}/geminiProxy`, {
+          const res = await authFetch(`${FUNCTIONS_BASE}/geminiProxy`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -670,7 +671,7 @@ export default function SystemHealthPage() {
       let toastLive = { status: hasToastCreds ? 'healthy' : 'warning', message: hasToastCreds ? 'Active – nightly sync at midnight' : 'Not configured' }
       if (hasToastCreds) {
         try {
-          const res = await fetch(`${FUNCTIONS_BASE}/toastAuth`, {
+          const res = await authFetch(`${FUNCTIONS_BASE}/toastAuth`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({}),
@@ -684,7 +685,7 @@ export default function SystemHealthPage() {
         }
       }
 
-      const toastAuthPing = await fetch(`${FUNCTIONS_BASE}/toastAuth`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      const toastAuthPing = await authFetch(`${FUNCTIONS_BASE}/toastAuth`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
         .then((r) => (r.ok || r.status === 400 || r.status === 401 ? 'healthy' : 'error'))
         .catch(() => 'error')
       const syncPing = await fetch(`${FUNCTIONS_BASE}/syncTrainerSchedules`, { method: 'GET' })

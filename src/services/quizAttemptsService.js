@@ -29,7 +29,13 @@ export async function createQuizAttempt(data) {
   return ref.id
 }
 
-/** Persist aggregate test result via Cloud Function (session-validated — cannot spoof scores). */
+/**
+ * Persist aggregate test result via Cloud Function (session-validated: requires a
+ * live trainee session, and the attempt counter can't be replayed past maxAttempts).
+ * NOT score-validated — scores/passed are still trusted from the client; see
+ * recordTestAttempt's docstring for why real server-side grading is a separate,
+ * larger fix.
+ */
 export async function saveTestResult(traineeId, testId, resultData) {
   if (!traineeId || !testId) return
   try {
