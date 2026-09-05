@@ -33,6 +33,7 @@ import HealthSummaryCard from '../components/HealthSummaryCard'
 import WeaknessPracticePanel from '../components/WeaknessPracticePanel'
 import MyFlagsPanel from '../components/MyFlagsPanel'
 import TestReadinessPanel from '../components/TestReadinessPanel'
+import PreCertBriefing from '../components/PreCertBriefing'
 import { getPendingChecks } from '../services/postShiftCheckService'
 import { getVerbalCertPractice } from '../services/verbalCertPracticeService'
 import { logClientError } from '../services/errorLogger'
@@ -542,6 +543,20 @@ export default function TraineeDashboard() {
               traineeName={rec?.name}
               userId={traineeId}
               trainingData={trainingData}
+            />
+          )}
+
+          {/* AI-phrased summary of the same data TestReadinessPanel shows below */}
+          {traineeId && (
+            <PreCertBriefing
+              traineeId={traineeId}
+              traineeName={rec?.name || currentUser?.name}
+              getStruggleCards={getStruggleCards}
+              getMasteredCards={getMasteredCards}
+              getStudiedCardIds={getStudiedCardIds}
+              getAttempts={testAttempts.getAttempts}
+              getRequiredScore={testAttempts.getRequiredScore}
+              getBestScore={testAttempts.getBestScore}
             />
           )}
 

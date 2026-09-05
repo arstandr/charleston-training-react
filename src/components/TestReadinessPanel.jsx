@@ -1,14 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getActiveFlashcards } from '../services/flashcardService'
-import { stableCardId } from '../utils/helpers'
-
-const TEST_PLAN = [
-  { testId: 'bar_test',    setId: 'bar-beer',               label: 'Bar & Beer Test' },
-  { testId: 'wines_test',  setId: 'wines-cocktails',         label: 'Wine & Cocktails Test' },
-  { testId: 'soups_test',  setId: 'starters-soups-salads',   label: 'Starters, Soups & Salads Test' },
-  { testId: 'steaks_test', setId: 'steaks-specialties',      label: 'Steaks & Specialties Test' },
-]
+import { TEST_PLAN, computeTestReadiness } from '../utils/testReadiness'
 
 /**
  * TestReadinessPanel — per-test mastery breakdown for the trainee.
@@ -53,63 +46,16 @@ export default function TestReadinessPanel({
     return () => { cancelled = true }
   }, [])
 
-  // All struggle/mastered card IDs (across every set)
-  const allStruggleIds = useMemo(() => new Set(getStruggleCards?.() || []), [getStruggleCards])
-  const allMasteredIds = useMemo(() => new Set(getMasteredCards?.() || []), [getMasteredCards])
-  const allStudiedIds = useMemo(() => new Set(getStudiedCardIds?.() || []), [getStudiedCardIds])
-
-  // Per-test computed data
-  const testData = useMemo(() => {
-    return TEST_PLAN.map(({ testId, setId, label }) => {
-      const cards = cardSets[setId] || []
-      const total = cards.length
-
-      // Build lookup: stableId → card (for finding card fronts of struggling cards)
-      const cardByStableId = {}
-      cards.forEach((card) => {
-        cardByStableId[stableCardId(setId, card)] = card
-      })
-
-      // Filter mastery sets to this set (cardIds start with `${setId}_`)
-      const prefix = setId + '_'
-      const masteredInSet = [...allMasteredIds].filter((id) => id.startsWith(prefix))
-      const struggleInSet = [...allStruggleIds].filter((id) => id.startsWith(prefix))
-      const studiedInSet = [...allStudiedIds].filter((id) => id.startsWith(prefix))
-
-      const masteredCount = masteredInSet.length
-      const struggleCount = struggleInSet.length
-      // studiedCount = all cards with any mastery record (mastered + struggling + in-progress)
-      const studiedCount = studiedInSet.length
-      const unstudiedCount = Math.max(0, total - studiedCount)
-
-      // Top struggling cards (up to 4), with front text
-      const topStruggling = struggleInSet
-        .slice(0, 4)
-        .map((id) => cardByStableId[id])
-        .filter(Boolean)
-        .map((c) => c.front)
-
-      const masteryPct = total > 0 ? Math.round(((studiedCount - struggleCount) / total) * 100) : 0
-
-      const { count: attemptCount, passed, maxAttempts } = getAttempts?.(testId) || { count: 0, passed: false, maxAttempts: 2 }
-      const requiredScore = getRequiredScore?.(testId) ?? 80
-      const bestScore = getBestScore?.(testId) ?? null
-
-      // Readiness state
-      let readiness = 'not-started'
-      if (passed) readiness = 'passed'
-      else if (studiedCount === 0) readiness = 'not-started'
-      else if (masteryPct >= 75) readiness = 'strong'
-      else if (masteryPct >= 50) readiness = 'building'
-      else readiness = 'early'
-
-      return {
-        testId, setId, label,
-        total, masteredCount, studiedCount, struggleCount, unstudiedCount, masteryPct,
-        topStruggling, readiness, passed, attemptCount, maxAttempts, requiredScore, bestScore,
-      }
-    })
-  }, [cardSets, allStruggleIds, allMasteredIds, allStudiedIds, getAttempts, getRequiredScore])
+  // Per-test computed data (shared with PreCertBriefing via utils/testReadiness)
+  const testData = useMemo(() => computeTestReadiness({
+    cardSets,
+    struggleIds: getStruggleCards?.() || [],
+    masteredIds: getMasteredCards?.() || [],
+    studiedIds: getStudiedCardIds?.() || [],
+    getAttempts,
+    getRequiredScore,
+    getBestScore,
+  }), [cardSets, getStruggleCards, getMasteredCards, getStudiedCardIds, getAttempts, getRequiredScore, getBestScore])
 
   if (loading) {
     return (

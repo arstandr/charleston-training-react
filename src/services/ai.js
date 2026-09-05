@@ -356,6 +356,32 @@ export async function getMorningBriefing(traineeName, struggleTopicNames = []) {
 }
 
 /**
+ * Personalized "what to focus on before your cert" briefing. The substance
+ * (mastery %, readiness tier, struggling cards) is already computed
+ * deterministically by utils/testReadiness.js — this only phrases it, it
+ * never invents scores or readiness itself.
+ * @param {string} traineeName
+ * @param {ReturnType<typeof import('../utils/testReadiness').computeTestReadiness>} testReadinessList
+ */
+export async function getPreCertBriefing(traineeName, testReadinessList) {
+  const lines = (testReadinessList || []).map((t) => {
+    if (t.passed) return `${t.label}: PASSED${t.bestScore != null ? ` (best score ${t.bestScore}%)` : ''}`
+    if (t.total === 0) return `${t.label}: no flashcards loaded yet`
+    const struggling = t.topStruggling.length ? ` Struggling with: ${t.topStruggling.slice(0, 3).join(', ')}.` : ''
+    return `${t.label}: ${t.masteryPct}% mastered, readiness=${t.readiness}, needs ${t.requiredScore}% to pass.${struggling}`
+  })
+
+  const prompt = `You are a warm, encouraging training coach for a restaurant server trainee named ${traineeName || 'this trainee'}.
+
+Here is their current test readiness data (already computed, do not invent or contradict any of it):
+${lines.join('\n') || '(no data yet)'}
+
+Write a short (3-5 sentence) personalized briefing: acknowledge what they've already mastered or passed, name the ONE or TWO tests that most need attention and why (cite the specific struggling topics if given), and end with one concrete, encouraging next step. Do not use generic filler like "keep up the good work" without something specific attached to it. No preamble, no markdown, just the briefing text.`
+
+  return callGemini([{ role: 'user', parts: [{ text: prompt }] }], { maxOutputTokens: 300, temperature: 0.6 })
+}
+
+/**
  * Handbook / ? chat: 5-mode brain (Upsell, Quiz me, Translate, Sommelier, Handbook Q&A). Uses knowledge base and history.
  * @param {string} userMessage - Latest user question
  * @param {{ role: string, content: string }[]} history - Previous messages (user/model)
