@@ -1369,6 +1369,12 @@ export default function QuizzesPage() {
               <span className="text-xs text-gray-600">Extra credit — not required to pass</span>
             </div>
           )}
+          {mode === 'practice' && currentQ.tier === 'struggle' && (
+            <div className="flex items-center gap-1.5 mb-3 text-xs font-medium text-orange-700">
+              <span aria-hidden>🎯</span>
+              <span>You've struggled with this one before — that's why it's back</span>
+            </div>
+          )}
           <p className="mb-4 font-medium text-gray-800">{currentQ.q}</p>
           {mode === 'official' ? (
             (hintsRemaining === null || hintsRemaining > 0) && (

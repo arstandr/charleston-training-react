@@ -22,8 +22,11 @@ function shuffle(arr) {
   return a
 }
 
-/** Convert a flashcard with quizData into a quiz question object. */
-function cardToQuestion(card) {
+/** Convert a flashcard with quizData into a quiz question object. `tier` is the
+ * mastery classification ('struggle'|'mastered'|'neutral') that drove this
+ * question's selection odds — carried through so the UI can show the trainee
+ * why they're seeing it, instead of the selection logic being invisible. */
+function cardToQuestion(card, tier = 'neutral') {
   const qd = card.quizData
   return {
     q: qd.q,
@@ -34,6 +37,7 @@ function cardToQuestion(card) {
     cardFront: card.front,
     cardBack: card.back,
     source: 'flashcard',
+    tier,
   }
 }
 
@@ -61,11 +65,13 @@ export function buildAdaptiveOfficialTest(testId, traineeId, deps, data) {
   const struggleIndices = []
   const masteredIndices = []
   const neutralIndices = []
+  const tierByIndex = new Map()
 
   for (let i = 0; i < pool.length; i++) {
     const card = pool[i]
     const cardId = stableCardId ? stableCardId(setId, card) : card.id
     const status = cardId && traineeId ? (getMastery(cardId) || {}).status : null
+    tierByIndex.set(i, status || 'neutral')
     if (status === 'struggle') struggleIndices.push(i)
     else if (status === 'mastered') masteredIndices.push(i)
     else neutralIndices.push(i)
@@ -115,7 +121,7 @@ export function buildAdaptiveOfficialTest(testId, traineeId, deps, data) {
       selected = shuffle([...strugglePool, ...fillPool.slice(0, remaining)])
     }
   }
-  const questions = selected.map((i) => cardToQuestion(pool[i]))
+  const questions = selected.map((i) => cardToQuestion(pool[i], tierByIndex.get(i)))
   const indices = selected
   return { questions, indices }
 }
@@ -149,19 +155,23 @@ export function getNextInfiniteQuestion(testId, traineeId, deps, sessionHistory,
     const card = pool[i]
     const cardId = stableCardId ? stableCardId(setId, card) : card.id
     const status = cardId && traineeId ? (getMastery(cardId) || {}).status : null
+    const tier = status || 'neutral'
     let w = 10
     if (status === 'struggle') w = 50
     else if (status === 'mastered') w = 2
-    for (let j = 0; j < w; j++) weighted.push({ i, cardId })
+    for (let j = 0; j < w; j++) weighted.push({ i, cardId, tier })
   }
 
   if (weighted.length === 0) {
     // All questions recently shown — pick random from full pool
     const idx = Math.floor(Math.random() * pool.length)
-    return { question: cardToQuestion(pool[idx]), index: idx, cardId: pool[idx].id }
+    const card = pool[idx]
+    const cardId = stableCardId ? stableCardId(setId, card) : card.id
+    const status = cardId && traineeId ? (getMastery(cardId) || {}).status : null
+    return { question: cardToQuestion(card, status || 'neutral'), index: idx, cardId: card.id }
   }
   const pick = weighted[Math.floor(Math.random() * weighted.length)]
-  return { question: cardToQuestion(pool[pick.i]), index: pick.i, cardId: pick.cardId }
+  return { question: cardToQuestion(pool[pick.i], pick.tier), index: pick.i, cardId: pick.cardId }
 }
 
 export { OFFICIAL_QUESTION_COUNT }
