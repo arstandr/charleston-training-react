@@ -4,21 +4,49 @@
  * Used for Socratic hints, quiz generation, flashcard generation, training drift audit.
  */
 
+import { auth } from '../firebase'
+
 const FUNCTIONS_BASE = 'https://us-central1-chartrain-20901.cloudfunctions.net'
 const GEMINI_PROXY_URL = FUNCTIONS_BASE + '/geminiProxy'
 
 /**
  * Low-level Gemini call (for proxy). Returns response text.
  * Used by Menu Ingestion AI semantic scan and other features.
+ *
+ * geminiProxy requires a caller identity (functions/modules/httpAuth.js requireCaller,
+ * allowTrainee: true) — staff attach a Firebase ID token, trainees (who have no
+ * Firebase Auth session) send {traineeId, sessionToken} in the body instead, same
+ * dual-auth branch FloatingChatbot.jsx already uses successfully. This function used
+ * to send neither, so every caller of it (getSocraticHint, generateQuizQuestions,
+ * getMorningBriefing, etc.) was silently getting 401'd in prod since geminiProxy was
+ * auth-gated — this was never re-verified against that gate until now.
  */
 export async function callGemini(contents, generationConfig = {}) {
+  const body = {
+    contents: Array.isArray(contents) ? contents : [{ role: 'user', parts: [{ text: contents }] }],
+    generationConfig: { maxOutputTokens: 1024, temperature: 0.7, ...generationConfig },
+  }
+
+  const staffUser = auth.currentUser
+  let headers = { 'Content-Type': 'application/json' }
+  let payload = body
+  if (staffUser) {
+    try {
+      const token = await staffUser.getIdToken()
+      headers.Authorization = `Bearer ${token}`
+    } catch (_) {}
+  } else {
+    payload = {
+      ...body,
+      traineeId: sessionStorage.getItem('traineeId') || '',
+      sessionToken: sessionStorage.getItem('sessionToken') || '',
+    }
+  }
+
   const res = await fetch(GEMINI_PROXY_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: Array.isArray(contents) ? contents : [{ role: 'user', parts: [{ text: contents }] }],
-      generationConfig: { maxOutputTokens: 1024, temperature: 0.7, ...generationConfig },
-    }),
+    headers,
+    body: JSON.stringify(payload),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
@@ -377,16 +405,8 @@ Reply according to the mode that best matches the user's input. Be concise.`
  */
 export async function checkGeminiConfigured() {
   try {
-    const res = await fetch(GEMINI_PROXY_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: 'Reply with OK' }] }],
-        generationConfig: { maxOutputTokens: 10 },
-      }),
-    })
-    const data = await res.json()
-    return res.ok && data.candidates?.[0]?.content?.parts?.[0]?.text != null
+    const text = await callGemini('Reply with OK', { maxOutputTokens: 10 })
+    return text != null
   } catch (_) {
     return false
   }
