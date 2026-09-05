@@ -5,10 +5,12 @@ import TraineeNavTabs from '../components/TraineeNavTabs'
 import { useAuth } from '../contexts/AuthContext'
 import { PHASE2_LOCAL_OPTIONS, PHASE3_FOOD_MENU, PHASE4_BAR } from '../data/verbalCertQuestions'
 import { PHASE2_ANSWERS, PHASE3_ANSWERS, PHASE4_ANSWERS } from '../data/verbalCertAnswers'
-import { gradeMockCertAnswer } from '../services/ai'
+import { TRAINING_SCENARIOS } from '../data/standardsData'
+import { gradeMockCertAnswer, getGuestRoleplayReply } from '../services/ai'
 
 const DAILY_CAP = 30
 const CAP_KEY_PREFIX = 'mockCertGradesUsed_'
+const ROLEPLAY_TURN_CAP = 8
 
 function todayCapKey(traineeId) {
   return `${CAP_KEY_PREFIX}${traineeId}_${new Date().toISOString().slice(0, 10)}`
@@ -72,10 +74,18 @@ export default function MockCertPracticePage() {
   const [sessionResults, setSessionResults] = useState([]) // all grades this session
   const [capReached, setCapReached] = useState(() => getGradesUsedToday(traineeId) >= DAILY_CAP)
 
-  const questions = useMemo(() => (phaseKey ? buildGradableQuestions(phaseKey) : []), [phaseKey])
+  const [scenario, setScenario] = useState(null)
+  const [chat, setChat] = useState([])
+  const [chatInput, setChatInput] = useState('')
+  const [chatSending, setChatSending] = useState(false)
+  const [roleplayDone, setRoleplayDone] = useState(false)
+  const [roleplayError, setRoleplayError] = useState(false)
+
+  const isRoleplay = phaseKey === 'roleplay'
+  const questions = useMemo(() => (phaseKey && !isRoleplay ? buildGradableQuestions(phaseKey) : []), [phaseKey, isRoleplay])
   const current = questions[index]
   const isLast = index >= questions.length - 1
-  const done = phaseKey && index >= questions.length
+  const done = phaseKey && !isRoleplay && index >= questions.length
 
   function startPhase(key) {
     setPhaseKey(key)
@@ -116,6 +126,70 @@ export default function MockCertPracticePage() {
     setAnswerText('')
     setResult(null)
     setSessionResults([])
+    setScenario(null)
+    setChat([])
+    setChatInput('')
+    setRoleplayDone(false)
+    setRoleplayError(false)
+  }
+
+  function splitCoachNote(reply) {
+    const idx = reply.indexOf('COACH:')
+    if (idx === -1) return [reply.trim(), null]
+    return [reply.slice(0, idx).trim(), reply.slice(idx + 'COACH:'.length).trim()]
+  }
+
+  async function startRoleplay() {
+    if (getGradesUsedToday(traineeId) >= DAILY_CAP) {
+      setCapReached(true)
+      return
+    }
+    const scn = TRAINING_SCENARIOS[Math.floor(Math.random() * TRAINING_SCENARIOS.length)]
+    setPhaseKey('roleplay')
+    setScenario(scn)
+    setChat([])
+    setChatInput('')
+    setRoleplayDone(false)
+    setRoleplayError(false)
+    setChatSending(true)
+    try {
+      const opening = await getGuestRoleplayReply([], scn, false)
+      incrementGradesUsedToday(traineeId)
+      setChat([{ role: 'guest', text: opening.trim() }])
+    } catch (_) {
+      setRoleplayError(true)
+    } finally {
+      setChatSending(false)
+    }
+  }
+
+  async function sendRoleplayMessage(text) {
+    if (!text.trim() || chatSending || roleplayDone) return
+    if (getGradesUsedToday(traineeId) >= DAILY_CAP) {
+      setCapReached(true)
+      return
+    }
+    const nextHistory = [...chat, { role: 'trainee', text: text.trim() }]
+    setChat(nextHistory)
+    setChatInput('')
+    setRoleplayError(false)
+    setChatSending(true)
+    const traineeTurns = nextHistory.filter((m) => m.role === 'trainee').length
+    const isFinalTurn = traineeTurns >= ROLEPLAY_TURN_CAP
+    try {
+      const reply = await getGuestRoleplayReply(nextHistory, scenario, isFinalTurn)
+      incrementGradesUsedToday(traineeId)
+      const [guestLine, coachLine] = splitCoachNote(reply)
+      setChat((prev) => [...prev, { role: 'guest', text: guestLine }])
+      if (coachLine) {
+        setChat((prev) => [...prev, { role: 'coach', text: coachLine }])
+        setRoleplayDone(true)
+      }
+    } catch (_) {
+      setRoleplayError(true)
+    } finally {
+      setChatSending(false)
+    }
   }
 
   const nailedCount = sessionResults.filter((r) => {
@@ -163,6 +237,64 @@ export default function MockCertPracticePage() {
                 </button>
               )
             })}
+            <button
+              type="button"
+              disabled={capReached}
+              onClick={startRoleplay}
+              className="w-full text-left px-4 py-3 rounded-xl border border-gray-200 bg-white hover:border-[var(--color-primary)] hover:bg-green-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <span className="font-semibold text-gray-800">🎭 Guest Role-Play</span>
+              <span className="ml-2 text-xs text-gray-500">improvise a live scenario with an AI guest</span>
+            </button>
+          </div>
+        )}
+
+        {isRoleplay && (
+          <div className="rounded-xl border-2 border-gray-200 bg-white p-5 shadow-sm">
+            <p className="text-xs text-gray-400 mb-2">{scenario?.title}</p>
+            <div className="space-y-2 mb-3 max-h-96 overflow-y-auto">
+              {chat.map((m, i) => (
+                <div
+                  key={i}
+                  className={
+                    m.role === 'coach'
+                      ? 'rounded-lg bg-blue-50 border border-blue-200 px-3 py-2 text-sm text-blue-800'
+                      : m.role === 'trainee'
+                        ? 'rounded-lg bg-green-50 border border-green-200 px-3 py-2 text-sm text-gray-800 ml-8'
+                        : 'rounded-lg bg-gray-50 border border-gray-200 px-3 py-2 text-sm text-gray-800 mr-8'
+                  }
+                >
+                  {m.role === 'coach' && <span className="font-semibold">Coach: </span>}
+                  {m.text}
+                </div>
+              ))}
+              {chatSending && <p className="text-xs text-gray-400">…</p>}
+              {roleplayError && <p className="text-xs text-red-500">Couldn't reach the AI guest — try sending again.</p>}
+            </div>
+            {!roleplayDone ? (
+              <div className="flex gap-2">
+                <input
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && sendRoleplayMessage(chatInput)}
+                  placeholder="Respond to the guest…"
+                  className="flex-1 px-3 py-2 border-2 border-gray-300 rounded-lg text-sm"
+                  disabled={chatSending}
+                />
+                <button
+                  type="button"
+                  onClick={() => sendRoleplayMessage(chatInput)}
+                  disabled={chatSending || !chatInput.trim()}
+                  className="btn disabled:opacity-50"
+                >
+                  Send
+                </button>
+              </div>
+            ) : (
+              <button type="button" onClick={exitToPicker} className="mt-1 w-full py-3 bg-[var(--color-primary)] text-white font-semibold rounded-xl">
+                Practice another scenario
+              </button>
+            )}
           </div>
         )}
 

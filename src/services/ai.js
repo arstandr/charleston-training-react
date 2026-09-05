@@ -400,6 +400,39 @@ ${isChecklist
 }
 
 /**
+ * AI guest role-play: the AI plays a restaurant guest (varying demeanor) reacting
+ * to the trainee's in-character replies. Folded into Mock Cert Practice rather than
+ * a standalone page. Grounded in a real TRAINING_SCENARIOS entry so the AI has a
+ * concrete situation instead of inventing one from nothing each time.
+ * @param {{role: 'trainee'|'guest', text: string}[]} conversationHistory
+ * @param {{title: string, prompt: string, standard: string}} scenario
+ * @param {boolean} isFinalTurn - true on the last allowed exchange; asks the AI to close the scene in character then add a short coaching note
+ */
+export async function getGuestRoleplayReply(conversationHistory, scenario, isFinalTurn = false) {
+  const historyText = (conversationHistory || [])
+    .map((m) => `${m.role === 'trainee' ? 'Trainee' : 'Guest (you)'}: ${m.text}`)
+    .join('\n')
+
+  const wrapInstruction = isFinalTurn
+    ? '\n\nThis is the LAST exchange of the practice session. Reply in character as the guest to close out the scene naturally, then on a new line write "COACH: " followed by one short, encouraging coaching sentence about how the trainee handled the scenario.'
+    : ''
+
+  const prompt = `You are playing a restaurant GUEST in a training role-play for a new server. Stay fully in character as the guest — never break character, never explain the standard, never grade the trainee mid-scene.
+
+SCENARIO: ${scenario.prompt}
+(Standard the trainee should be applying, for your own grounding only — do not recite it: ${scenario.standard})
+
+Play the guest with a real, specific demeanor for this scenario (demanding, confused, chatty, impatient, or ordinary — pick something plausible, not generic). Keep replies short and natural, like real restaurant dialogue.
+
+CONVERSATION SO FAR:
+${historyText || '(the scene is just starting — open it as the guest)'}${wrapInstruction}
+
+Reply with only the guest's next line${isFinalTurn ? ' plus the COACH line' : ''} — no preamble, no stage directions in brackets.`
+
+  return callGemini([{ role: 'user', parts: [{ text: prompt }] }], { maxOutputTokens: 300, temperature: 0.8 })
+}
+
+/**
  * Generate a short morning briefing / greeting for the trainee, encouraging focus on struggle topics.
  */
 export async function getMorningBriefing(traineeName, struggleTopicNames = []) {
