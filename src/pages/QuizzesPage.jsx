@@ -8,7 +8,6 @@ import { useTestActive } from '../contexts/TestActiveContext'
 import { useTestAttempts } from '../hooks/useTestAttempts'
 import { useQuizAttempts } from '../hooks/useQuizAttempts'
 import { analyzeQuizResults } from '../services/quizIntelligenceService'
-import { saveTestReview } from '../services/quizAttemptsService'
 import QuizPerformanceInsights from '../components/QuizPerformanceInsights'
 import { useFlashcardMastery } from '../hooks/useFlashcardMastery'
 import { getSocraticHint, getExamHint } from '../services/ai'
@@ -605,31 +604,18 @@ export default function QuizzesPage() {
     const overallPercentage = total ? Math.round((totalCorrect / total) * 100) : 0
     const hintsUsed = mode === 'official' && hintsRemaining != null ? HINTS_PER_OFFICIAL_TEST - hintsRemaining : undefined
     const bonusQuestionIds = sessionState.bonusQuestionIds || []
+    // Server grades this independently from cardId + the selected option TEXT
+    // (never a client-computed score/passed, never an option index — bonus
+    // question options are shuffled client-side, so text is what survives the
+    // round-trip). testReviews is now written by the Cloud Function too.
+    const answersForGrading = questionsToScore.map((q, i) => ({
+      cardId: q?.cardId || null,
+      questionId: q?.bonusId ? `bonus_${q.bonusId}` : (sessionState.indices && sessionState.indices[i] !== undefined ? `${testId}_${sessionState.indices[i]}` : `${testId}_${i}`),
+      selectedText: typeof sessionState.answers[i]?.choiceIndex === 'number' ? (q?.opts?.[sessionState.answers[i].choiceIndex] ?? null) : null,
+      isBonus: !!q?.isBonus,
+    }))
     if (testId && mode === 'official' && traineeId) {
-      recordAttempt(testId, score, passed, { hintsUsed, bonusQuestionIds })
-    }
-
-    // Save full question-level data for manager review — direct Firestore write, no hook dependency
-    if (testId && mode === 'official' && traineeId) {
-      const reviewQuestions = sessionState.questions.map((q, i) => ({
-        questionId: q?.bonusId ? `bonus_${q.bonusId}` : (sessionState.indices && sessionState.indices[i] !== undefined ? `${testId}_${sessionState.indices[i]}` : `${testId}_${i}`),
-        questionText: q?.q ?? q?.question ?? '',
-        options: q?.opts || [],
-        correctIndex: typeof q?.ans === 'number' ? q.ans : 0,
-        selectedAnswer: sessionState.answers[i]?.choiceIndex ?? null,
-        correct: !!(sessionState.answers[i]?.correct),
-        explanation: q?.exp || '',
-        isBonus: !!q?.isBonus,
-      }))
-      const { count: attemptCount } = (() => { try { const a = JSON.parse(localStorage.getItem('testAttempts') || '{}'); return a[`${traineeId}_${testId}`] || { count: 0 } } catch (_) { return { count: 0 } } })()
-      // recordAttempt() already incremented count in localStorage, so attemptCount IS the current attempt number
-      saveTestReview(traineeId, testId, {
-        score,
-        passed,
-        timestamp: new Date().toISOString(),
-        attemptNumber: attemptCount || 1,
-        questions: reviewQuestions,
-      })
+      recordAttempt(testId, score, passed, { hintsUsed, bonusQuestionIds, answers: answersForGrading })
     }
 
     if (traineeId) releaseLock(traineeId)

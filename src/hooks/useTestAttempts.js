@@ -197,13 +197,14 @@ export function useTestAttempts(traineeId) {
       }
       attempts[key] = rec
       saveAttempts(attempts)
-      // Persist to Firestore so lockout works cross-browser and trainers can see results
+      // Persist to Firestore so lockout works cross-browser and trainers can see results.
+      // scores/passed here are NOT trusted by the server — it grades meta.answers itself
+      // (cardId + selected option text) and derives its own score/passed/testReviews.
       saveTestResult(traineeId, testId, {
         count: rec.count,
-        scores: rec.scores,
-        passed: rec.passed,
         maxAttempts: rec.maxAttempts || DEFAULT_MAX_ATTEMPTS,
         usedBonusIds: rec.usedBonusIds || [],
+        answers: meta.answers || [],
       })
     },
     [traineeId]

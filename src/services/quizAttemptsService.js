@@ -32,9 +32,8 @@ export async function createQuizAttempt(data) {
 /**
  * Persist aggregate test result via Cloud Function (session-validated: requires a
  * live trainee session, and the attempt counter can't be replayed past maxAttempts).
- * NOT score-validated — scores/passed are still trusted from the client; see
- * recordTestAttempt's docstring for why real server-side grading is a separate,
- * larger fix.
+ * resultData.answers ({cardId, selectedText, isBonus}[]) is graded server-side —
+ * score/passed are derived by the Cloud Function, never trusted from the client.
  */
 export async function saveTestResult(traineeId, testId, resultData) {
   if (!traineeId || !testId) return
@@ -134,27 +133,9 @@ export async function getFailedTestSession(traineeId, testId) {
   }
 }
 
-/**
- * Save a full official test session to testReviews for manager review.
- * Called directly at test-end — does NOT go through useQuizAttempts hook.
- * Each attempt is its own document so all attempts are reviewable.
- */
-export async function saveTestReview(traineeId, testId, { score, passed, timestamp, attemptNumber, questions }) {
-  if (!db || !traineeId || !testId || !Array.isArray(questions) || !questions.length) return
-  try {
-    await addDoc(collection(db, REVIEWS_COLLECTION), {
-      traineeId: String(traineeId),
-      testId,
-      score,
-      passed: !!passed,
-      timestamp: timestamp || new Date().toISOString(),
-      attemptNumber: attemptNumber || 1,
-      questions,
-    })
-  } catch (e) {
-    console.error('[saveTestReview] Failed:', e?.message)
-  }
-}
+// testReviews is now written server-side by the recordTestAttempt Cloud
+// Function (graded from cardId + selected text) — firestore.rules denies
+// direct client writes to this collection.
 
 /**
  * Get the most recent test review session for a trainee + test.
