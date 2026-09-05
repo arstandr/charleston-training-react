@@ -168,6 +168,15 @@ export default function VerbalCertPracticePage() {
             </div>
           )}
 
+          <button
+            type="button"
+            onClick={() => navigate('/mock-cert-practice')}
+            className="mb-4 w-full text-left px-4 py-3 rounded-xl border-2 border-[var(--color-primary)]/40 bg-green-50 hover:bg-green-100 transition-colors"
+          >
+            <span className="font-semibold text-gray-800">🎙️ Try the AI Mock Exam</span>
+            <span className="block text-xs text-gray-600 mt-0.5">Type your answers out loud-style and get graded on substance, like a real manager listening in.</span>
+          </button>
+
           {/* Phase tabs */}
           <div className="flex overflow-x-auto scrollbar-hide gap-1 mb-6 bg-gray-100 rounded-xl p-1">
             {PHASES.map((p) => (

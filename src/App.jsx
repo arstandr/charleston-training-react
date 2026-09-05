@@ -38,6 +38,7 @@ const TrainingShiftsPage = lazy(() => import('./pages/TrainingShiftsPage'))
 const FlashcardsPage = lazy(() => import('./pages/FlashcardsPage'))
 const QuizzesPage = lazy(() => import('./pages/QuizzesPage'))
 const VerbalCertPracticePage = lazy(() => import('./pages/VerbalCertPracticePage'))
+const MockCertPracticePage = lazy(() => import('./pages/MockCertPracticePage'))
 
 function LazyRoute({ children }) {
   return (
@@ -330,6 +331,11 @@ function AppRoutes() {
       <Route path="/verbal-cert-practice" element={
         <ProtectedRoute allowedRoles={['trainee', 'trainer', 'manager', 'admin', 'owner']}>
           <ErrorBoundary><LazyRoute><VerbalCertPracticePage /></LazyRoute></ErrorBoundary>
+        </ProtectedRoute>
+      } />
+      <Route path="/mock-cert-practice" element={
+        <ProtectedRoute allowedRoles={['trainee', 'trainer', 'manager', 'admin', 'owner']}>
+          <ErrorBoundary><LazyRoute><MockCertPracticePage /></LazyRoute></ErrorBoundary>
         </ProtectedRoute>
       } />
       <Route path="/menu-management" element={<Navigate to="/menu-studio" replace />} />

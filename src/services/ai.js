@@ -361,6 +361,45 @@ Action: What should the manager focus on next?`
 }
 
 /**
+ * Grade a trainee's typed answer during AI mock verbal-cert practice, like a
+ * manager listening and reacting in real time. `referenceAnswer` is a
+ * verbalCertAnswers.js entry: {type:'checklist', items[], note?} or
+ * {type:'single', text}. Returns null on unparseable AI output rather than
+ * throwing — practice should degrade gracefully, never block the trainee.
+ */
+export async function gradeMockCertAnswer(question, referenceAnswer, traineeAnswer) {
+  if (!referenceAnswer || !traineeAnswer?.trim()) return null
+
+  const isChecklist = referenceAnswer.type === 'checklist'
+  const refText = isChecklist
+    ? `This answer should cover these parts:\n${referenceAnswer.items.map((it, i) => `${i + 1}. ${it}`).join('\n')}${referenceAnswer.note ? `\n(${referenceAnswer.note})` : ''}`
+    : `The correct answer is: ${referenceAnswer.text}`
+
+  const prompt = `You are a restaurant manager conducting a mock verbal certification exam with a server trainee. Grade generously but honestly — the trainee doesn't need exact wording, just the substance, the way a manager listening in person would judge it.
+
+QUESTION ASKED: "${question}"
+${refText}
+
+TRAINEE'S SPOKEN/TYPED ANSWER: "${traineeAnswer.trim()}"
+
+${isChecklist ? "For each listed part, decide if the trainee's answer covered it (even loosely or with a synonym)." : "Decide if the trainee's answer is substantively correct."}
+
+Respond ONLY with valid JSON, no markdown, no code fences:
+${isChecklist
+  ? `{"coveredItems": ["exact item text from the list that was covered"], "missedItems": ["exact item text from the list that was missed"], "feedback": "one encouraging sentence about what they got right or should add"}`
+  : `{"correct": true or false, "feedback": "one encouraging sentence explaining the verdict, including the right answer if they missed it"}`}`
+
+  try {
+    const raw = await callGemini([{ role: 'user', parts: [{ text: prompt }] }], { maxOutputTokens: 400, temperature: 0.3 })
+    const cleaned = raw.replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim()
+    return JSON.parse(cleaned)
+  } catch (e) {
+    console.warn('[MockCert] Grading failed:', e?.message)
+    return null
+  }
+}
+
+/**
  * Generate a short morning briefing / greeting for the trainee, encouraging focus on struggle topics.
  */
 export async function getMorningBriefing(traineeName, struggleTopicNames = []) {
