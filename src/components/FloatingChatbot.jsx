@@ -5,7 +5,7 @@ import { db } from '../firebase'
 import { logClientError, logFeatureUsage } from '../services/errorLogger'
 import { submitChatbotFlag } from '../services/chatbotFlagsService'
 import { reportQuizQuestionInaccuracy } from '../services/flashcardFlags'
-import { authFetch } from '../utils/authFetch'
+import { buildGeminiProxyRequest } from '../services/ai'
 
 const FUNCTIONS_BASE = 'https://us-central1-chartrain-20901.cloudfunctions.net'
 // Match "quiz me", "test me on steaks", "practice", "quiz", "test" with optional " on <topic>"
@@ -474,21 +474,12 @@ If you don't know something, say so honestly in a friendly way. Keep every respo
           maxOutputTokens: 256,
         }
       }
-      const response = currentUser?.staff
-        ? await authFetch(FUNCTIONS_BASE + '/geminiProxy', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(geminiBody),
-          })
-        : await fetch(FUNCTIONS_BASE + '/geminiProxy', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              ...geminiBody,
-              traineeId: sessionStorage.getItem('traineeId') || '',
-              sessionToken: sessionStorage.getItem('sessionToken') || '',
-            })
-          })
+      const { headers: geminiHeaders, body: geminiPayload } = await buildGeminiProxyRequest(geminiBody)
+      const response = await fetch(FUNCTIONS_BASE + '/geminiProxy', {
+        method: 'POST',
+        headers: geminiHeaders,
+        body: JSON.stringify(geminiPayload),
+      })
 
       if (!response.ok) {
         if (response.status === 429) {

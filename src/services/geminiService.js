@@ -1,11 +1,17 @@
 /**
- * Gemini AI Service - 100% Firestore.
- * API key: /config/geminiKey. Rate limiting: /users/{userId} (geminiRateLimited, geminiLiveRateLimited).
+ * Gemini AI Service.
+ * Rate limiting: /users/{userId} (geminiRateLimited, geminiLiveRateLimited) — Firestore, unchanged.
+ * Actual model calls go through the geminiProxy Cloud Function (buildGeminiProxyRequest,
+ * shared with ai.js) — this used to fetch the API key from Firestore and call Google
+ * directly from the browser, putting the key in a client-visible request URL. Fixed:
+ * no API key ever reaches the browser now; geminiProxy holds it server-side.
  */
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore'
 import { db } from '../firebase'
+import { buildGeminiProxyRequest } from './ai'
 
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
+const GEMINI_PROXY_URL = 'https://us-central1-chartrain-20901.cloudfunctions.net/geminiProxy'
 const MODEL = 'gemini-2.5-flash'
 const CONFIG_DOC = 'geminiKey'
 
@@ -189,26 +195,23 @@ export async function callGemini(prompt, userId, options = {}) {
     throw new Error(`Live rate limited. Wait ${remaining.live}s`)
   }
 
-  const apiKey = await getGeminiKey()
-  if (!apiKey) throw new Error('Gemini API key not configured')
-
   const body = {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: { temperature, maxOutputTokens: maxTokens },
   }
   if (systemInstruction) {
-    body.systemInstruction = { parts: [{ text: systemInstruction }] }
+    body.systemInstruction = systemInstruction
   }
+  const { headers, body: payload } = await buildGeminiProxyRequest(body)
 
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), timeout)
-  const url = `${GEMINI_BASE}/${MODEL}:generateContent?key=${apiKey}`
 
   try {
-    const response = await fetch(url, {
+    const response = await fetch(GEMINI_PROXY_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      headers,
+      body: JSON.stringify(payload),
       signal: controller.signal,
     })
     clearTimeout(timeoutId)
@@ -259,9 +262,6 @@ export async function callGeminiVision(prompt, base64Data, mimeType, userId, opt
     throw new Error(`Live rate limited. Wait ${remaining.live}s`)
   }
 
-  const apiKey = await getGeminiKey()
-  if (!apiKey) throw new Error('Gemini API key not configured')
-
   const body = {
     contents: [{
       parts: [
@@ -272,18 +272,18 @@ export async function callGeminiVision(prompt, base64Data, mimeType, userId, opt
     generationConfig: { temperature, maxOutputTokens: maxTokens },
   }
   if (systemInstruction) {
-    body.systemInstruction = { parts: [{ text: systemInstruction }] }
+    body.systemInstruction = systemInstruction
   }
+  const { headers, body: payload } = await buildGeminiProxyRequest(body)
 
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), timeout)
-  const url = `${GEMINI_BASE}/${MODEL}:generateContent?key=${apiKey}`
 
   try {
-    const response = await fetch(url, {
+    const response = await fetch(GEMINI_PROXY_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      headers,
+      body: JSON.stringify(payload),
       signal: controller.signal,
     })
     clearTimeout(timeoutId)

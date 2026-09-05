@@ -10,38 +10,42 @@ const FUNCTIONS_BASE = 'https://us-central1-chartrain-20901.cloudfunctions.net'
 const GEMINI_PROXY_URL = FUNCTIONS_BASE + '/geminiProxy'
 
 /**
- * Low-level Gemini call (for proxy). Returns response text.
- * Used by Menu Ingestion AI semantic scan and other features.
- *
  * geminiProxy requires a caller identity (functions/modules/httpAuth.js requireCaller,
  * allowTrainee: true) — staff attach a Firebase ID token, trainees (who have no
  * Firebase Auth session) send {traineeId, sessionToken} in the body instead, same
- * dual-auth branch FloatingChatbot.jsx already uses successfully. This function used
- * to send neither, so every caller of it (getSocraticHint, generateQuizQuestions,
- * getMorningBriefing, etc.) was silently getting 401'd in prod since geminiProxy was
- * auth-gated — this was never re-verified against that gate until now.
+ * dual-auth branch FloatingChatbot.jsx already uses successfully. Shared here so
+ * every geminiProxy caller in the app (this file, geminiService.js) authenticates
+ * the same way instead of each hand-rolling it — or, as happened before this fix,
+ * forgetting it and silently 401ing every call once the proxy got auth-gated.
+ */
+export async function buildGeminiProxyRequest(body) {
+  const staffUser = auth.currentUser
+  if (staffUser) {
+    try {
+      const token = await staffUser.getIdToken()
+      return { headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body }
+    } catch (_) {}
+  }
+  return {
+    headers: { 'Content-Type': 'application/json' },
+    body: {
+      ...body,
+      traineeId: sessionStorage.getItem('traineeId') || '',
+      sessionToken: sessionStorage.getItem('sessionToken') || '',
+    },
+  }
+}
+
+/**
+ * Low-level Gemini call (for proxy). Returns response text.
+ * Used by Menu Ingestion AI semantic scan and other features.
  */
 export async function callGemini(contents, generationConfig = {}) {
   const body = {
     contents: Array.isArray(contents) ? contents : [{ role: 'user', parts: [{ text: contents }] }],
     generationConfig: { maxOutputTokens: 1024, temperature: 0.7, ...generationConfig },
   }
-
-  const staffUser = auth.currentUser
-  let headers = { 'Content-Type': 'application/json' }
-  let payload = body
-  if (staffUser) {
-    try {
-      const token = await staffUser.getIdToken()
-      headers.Authorization = `Bearer ${token}`
-    } catch (_) {}
-  } else {
-    payload = {
-      ...body,
-      traineeId: sessionStorage.getItem('traineeId') || '',
-      sessionToken: sessionStorage.getItem('sessionToken') || '',
-    }
-  }
+  const { headers, body: payload } = await buildGeminiProxyRequest(body)
 
   const res = await fetch(GEMINI_PROXY_URL, {
     method: 'POST',
