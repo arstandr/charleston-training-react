@@ -4,6 +4,7 @@ import { collection, getDocs } from 'firebase/firestore'
 import { db } from '../firebase'
 import { logClientError, logFeatureUsage } from '../services/errorLogger'
 import { submitChatbotFlag } from '../services/chatbotFlagsService'
+import { reportQuizQuestionInaccuracy } from '../services/flashcardFlags'
 import { authFetch } from '../utils/authFetch'
 
 const FUNCTIONS_BASE = 'https://us-central1-chartrain-20901.cloudfunctions.net'
@@ -220,7 +221,7 @@ If you don't know something, say so honestly in a friendly way. Keep every respo
         if (selectedSetId) fcCards = fcCards.filter(c => (c.setId || 'default') === selectedSetId)
         for (const card of fcCards) {
           if (card.quizData?.q && Array.isArray(card.quizData.opts) && typeof card.quizData.ans === 'number' && isQuizApproved(card)) {
-            pool.push({ ...card.quizData, testId: card.setId || 'flashcard', source: 'flashcard' })
+            pool.push({ ...card.quizData, testId: card.setId || 'flashcard', source: 'flashcard', cardId: card.id })
           }
         }
       } catch (_) {}
@@ -259,6 +260,7 @@ If you don't know something, say so honestly in a friendly way. Keep every respo
         options: shuffle(options),
         explanation: question.exp || '',
         questionIndex,
+        cardId: question.cardId || '',
       },
     }
   }
@@ -552,6 +554,29 @@ If you don't know something, say so honestly in a friendly way. Keep every respo
     }
   }
 
+  // Quiz questions had no flag path at all before this — routed through the same
+  // reportQuizQuestionInaccuracy the main Quizzes page uses (it quarantines the
+  // underlying flashcard, unlike submitChatbotFlag's general chat-quality report,
+  // and shows up in the trainee's "questions you've flagged" dashboard panel).
+  async function submitQuizFlag(msgIdx, quizQuestion, reason) {
+    if (!currentUser) return
+    try {
+      const correctOption = quizQuestion.options.find((o) => o.correct)
+      await reportQuizQuestionInaccuracy({
+        cardId: quizQuestion.cardId || '',
+        quizQuestion: quizQuestion.question || '',
+        quizOptions: quizQuestion.options.map((o) => o.text),
+        quizCorrectAnswer: correctOption?.text || '',
+        reason: reason || 'Flagged as inaccurate',
+        reportedBy: currentUser.name || currentUser.traineeId || currentUser.id || '',
+      })
+      setFlaggedMsgIds(prev => new Set([...prev, msgIdx]))
+      setFlaggingMsgIdx(null)
+    } catch (err) {
+      console.error('submitQuizFlag error:', err)
+    }
+  }
+
   function handleKeyPress(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -615,24 +640,52 @@ If you don't know something, say so honestly in a friendly way. Keep every respo
                 const q = msg.quizQuestion
                 return (
                   <div key={idx} className="flex justify-start">
-                    <div className="max-w-[90%] p-3 rounded-2xl bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-bl-none shadow-sm">
-                      <p className="text-sm font-medium mb-2">{q.question}</p>
-                      <p className="text-xs text-gray-500 mb-2">Question {q.questionIndex + 1} of {QUIZ_SIZE}</p>
-                      <div className="space-y-2">
-                        {q.options.map((opt, oi) => {
-                          const answered = messages[idx + 1]?.quizFeedback != null
-                          return (
-                            <button
-                              key={oi}
-                              type="button"
-                              disabled={answered}
-                              className="w-full text-left px-3 py-2 rounded-lg border-2 border-gray-200 dark:border-gray-600 hover:border-green-600 dark:hover:border-green-500 hover:bg-green-50 dark:hover:bg-green-900/20 text-sm transition-colors disabled:opacity-70 disabled:cursor-default"
-                              onClick={() => !answered && onQuizAnswer(idx, oi)}
-                            >
-                              {opt.text}
-                            </button>
-                          )
-                        })}
+                    <div className="relative max-w-[90%]">
+                      <div className="p-3 rounded-2xl bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-bl-none shadow-sm">
+                        <p className="text-sm font-medium mb-2">{q.question}</p>
+                        <p className="text-xs text-gray-500 mb-2">Question {q.questionIndex + 1} of {QUIZ_SIZE}</p>
+                        <div className="space-y-2">
+                          {q.options.map((opt, oi) => {
+                            const answered = messages[idx + 1]?.quizFeedback != null
+                            return (
+                              <button
+                                key={oi}
+                                type="button"
+                                disabled={answered}
+                                className="w-full text-left px-3 py-2 rounded-lg border-2 border-gray-200 dark:border-gray-600 hover:border-green-600 dark:hover:border-green-500 hover:bg-green-50 dark:hover:bg-green-900/20 text-sm transition-colors disabled:opacity-70 disabled:cursor-default"
+                                onClick={() => !answered && onQuizAnswer(idx, oi)}
+                              >
+                                {opt.text}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                      {/* Flag button — quiz questions had no way to report a bad one before this */}
+                      <div className="absolute -bottom-1 right-1">
+                        <button
+                          type="button"
+                          onClick={() => setFlaggingMsgIdx(flaggingMsgIdx === idx ? null : idx)}
+                          className={`text-xs p-1 rounded ${flaggedMsgIds.has(idx) ? 'text-red-600' : 'text-gray-400 hover:text-gray-600'}`}
+                          title="Flag this question"
+                        >
+                          🚩
+                        </button>
+                        {flaggingMsgIdx === idx && (
+                          <div className="absolute right-0 bottom-6 z-20 w-48 rounded-lg border border-gray-200 bg-white p-2 shadow-lg text-left">
+                            <p className="text-xs font-medium mb-2">What&apos;s wrong?</p>
+                            {['Wrong information', 'Confusing', 'Outdated', 'Other'].map((r) => (
+                              <button
+                                key={r}
+                                type="button"
+                                className="block w-full text-left px-2 py-1 text-xs hover:bg-gray-100 rounded"
+                                onClick={() => submitQuizFlag(idx, q, r)}
+                              >
+                                {r}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
