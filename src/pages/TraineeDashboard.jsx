@@ -31,6 +31,7 @@ import {
 import SkeletonCards from '../components/SkeletonCard'
 import HealthSummaryCard from '../components/HealthSummaryCard'
 import WeaknessPracticePanel from '../components/WeaknessPracticePanel'
+import MyFlagsPanel from '../components/MyFlagsPanel'
 import TestReadinessPanel from '../components/TestReadinessPanel'
 import { getPendingChecks } from '../services/postShiftCheckService'
 import { getVerbalCertPractice } from '../services/verbalCertPracticeService'
@@ -558,6 +559,9 @@ export default function TraineeDashboard() {
 
           {/* Weakness practice panel — quiz weak topics and weak spots */}
           {traineeId && <WeaknessPracticePanel userId={traineeId} />}
+
+          {/* Flags this trainee filed — reportQuizQuestionInaccuracy keys on this same fallback */}
+          {traineeId && <MyFlagsPanel identifier={currentUser?.name || traineeId} />}
 
           {/* Resume last activity - only when there is a resumable session */}
           {(resumeFlashcard || resumePracticeTest) && (

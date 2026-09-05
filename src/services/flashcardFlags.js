@@ -156,6 +156,22 @@ export async function reportQuizGenerationFailed({ cardId, front, back, setId })
   })
 }
 
+/**
+ * Get flags a specific trainee filed (reportQuizQuestionInaccuracy sets
+ * `reportedBy` to currentUser?.name || traineeId — same fallback used here).
+ * Lets the trainee see whether a question they flagged got fixed. No orderBy
+ * in the query (avoids needing a composite index for a small per-user list);
+ * sorted client-side instead.
+ */
+export async function getFlagsForUser(identifier) {
+  if (!db || !identifier) return []
+  const q = query(collection(db, COLLECTION), where('reportedBy', '==', identifier), limit(50))
+  const snap = await getDocs(q)
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => (b.reportedAt || '').localeCompare(a.reportedAt || ''))
+}
+
 /** Subscribe to pending flashcard flag count (real-time). Returns unsubscribe fn. */
 export function subscribePendingFlagCount(callback) {
   if (!db) return () => {}
