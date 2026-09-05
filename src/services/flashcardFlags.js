@@ -157,19 +157,23 @@ export async function reportQuizGenerationFailed({ cardId, front, back, setId })
 }
 
 /**
- * Get flags a specific trainee filed (reportQuizQuestionInaccuracy sets
- * `reportedBy` to currentUser?.name || traineeId — same fallback used here).
- * Lets the trainee see whether a question they flagged got fixed. No orderBy
+ * Get flags a specific trainee filed. reportQuizQuestionInaccuracy sets
+ * `reportedBy` to `currentUser?.name || traineeId`, and real prod data shows
+ * both actually occur for the same trainee across different flags (name
+ * often empty for some accounts) — so this takes every identifier that might
+ * have been used and queries each, merging + deduping by doc id. No orderBy
  * in the query (avoids needing a composite index for a small per-user list);
  * sorted client-side instead.
  */
-export async function getFlagsForUser(identifier) {
-  if (!db || !identifier) return []
-  const q = query(collection(db, COLLECTION), where('reportedBy', '==', identifier), limit(50))
-  const snap = await getDocs(q)
-  return snap.docs
-    .map((d) => ({ id: d.id, ...d.data() }))
-    .sort((a, b) => (b.reportedAt || '').localeCompare(a.reportedAt || ''))
+export async function getFlagsForUser(identifiers) {
+  const ids = [...new Set((Array.isArray(identifiers) ? identifiers : [identifiers]).filter(Boolean))]
+  if (!db || ids.length === 0) return []
+  const results = await Promise.all(
+    ids.map((id) => getDocs(query(collection(db, COLLECTION), where('reportedBy', '==', id), limit(50))))
+  )
+  const byId = new Map()
+  results.forEach((snap) => snap.docs.forEach((d) => byId.set(d.id, { id: d.id, ...d.data() })))
+  return [...byId.values()].sort((a, b) => (b.reportedAt || '').localeCompare(a.reportedAt || ''))
 }
 
 /** Subscribe to pending flashcard flag count (real-time). Returns unsubscribe fn. */

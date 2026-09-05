@@ -8,13 +8,15 @@ const STATUS_LABEL = {
 }
 
 /** Shows a trainee the questions they've flagged and whether anything came of it. */
-export default function MyFlagsPanel({ identifier }) {
+export default function MyFlagsPanel({ identifiers }) {
   const [flags, setFlags] = useState([])
+  const key = (identifiers || []).filter(Boolean).join('|')
 
   useEffect(() => {
-    if (!identifier) return
-    getFlagsForUser(identifier).then(setFlags).catch(() => setFlags([]))
-  }, [identifier])
+    if (!key) return
+    getFlagsForUser(identifiers).then(setFlags).catch(() => setFlags([]))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key])
 
   if (flags.length === 0) return null
 

@@ -560,8 +560,9 @@ export default function TraineeDashboard() {
           {/* Weakness practice panel — quiz weak topics and weak spots */}
           {traineeId && <WeaknessPracticePanel userId={traineeId} />}
 
-          {/* Flags this trainee filed — reportQuizQuestionInaccuracy keys on this same fallback */}
-          {traineeId && <MyFlagsPanel identifier={currentUser?.name || traineeId} />}
+          {/* Flags this trainee filed — real data shows reportedBy stored as either the
+              name or the traineeId depending on the account, so check both */}
+          {traineeId && <MyFlagsPanel identifiers={[currentUser?.name, traineeId]} />}
 
           {/* Resume last activity - only when there is a resumable session */}
           {(resumeFlashcard || resumePracticeTest) && (
