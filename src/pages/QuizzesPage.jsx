@@ -34,6 +34,9 @@ import { completePostShiftCheck } from '../services/postShiftCheckService'
 const PRACTICE_QUESTION_COUNT = 10
 const PRACTICE_QUESTION_COUNT_STRUGGLE = 20
 const REGULAR_QUESTION_COUNT = 20
+// Practice mode has no fixed length — it keeps generating questions — so this
+// is a soft session checkpoint (progress bar + "keep going?" prompt), not a limit.
+const PRACTICE_CHECKPOINT_SIZE = 10
 const BONUS_QUESTION_COUNT = 3
 const OFFICIAL_QUESTION_COUNT = REGULAR_QUESTION_COUNT + BONUS_QUESTION_COUNT
 const OFFICIAL_PASSING_PERCENT = 75
@@ -545,9 +548,21 @@ export default function QuizzesPage() {
 
   const handleExitQuiz = async () => {
     const inProgress = sessionState.questions.length > 0 && (sessionState.answers.length > 0 || sessionState.index > 0)
+    // Practice mode with at least one answered question: don't just discard it —
+    // score what's been answered so far and show the same results screen a
+    // finished practice session gets. Official mode is unchanged: leaving mid-test
+    // stays "progress lost" (the anti-cheat lock release below already assumes that).
+    const willScorePartial = mode === 'practice' && sessionState.answers.length > 0
     if (inProgress) {
-      const ok = await confirm('Leave quiz? Your progress will be lost.', 'Exit quiz')
+      const ok = await confirm(
+        willScorePartial ? "End practice here? We'll save your results so far." : 'Leave quiz? Your progress will be lost.',
+        'Exit quiz'
+      )
       if (!ok) return
+    }
+    if (willScorePartial) {
+      endPracticeAndShowResults()
+      return
     }
     exitQuiz()
   }
@@ -622,9 +637,11 @@ export default function QuizzesPage() {
 
     const topic = testId || 'generated'
     const quizSessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
-    const answers = sessionState.questions.map((_, i) => {
+    // Sliced to questionsToScore (answered-so-far in practice mode) — an early
+    // exit must not log the remaining, never-seen questions as missed/wrong.
+    const answers = questionsToScore.map((_, i) => {
       const a = sessionState.answers[i]
-      const q = sessionState.questions[i]
+      const q = questionsToScore[i]
       const questionId = q?.bonusId ? `bonus_${q.bonusId}` : (testId === 'generated' ? `generated_${i}` : (sessionState.indices && sessionState.indices[i] !== undefined ? `${testId}_${sessionState.indices[i]}` : `${testId}_${i}`))
       return {
         questionId,
@@ -675,7 +692,8 @@ export default function QuizzesPage() {
     if (traineeId) try { localStorage.removeItem(`${PRACTICE_SESSION_KEY}_${traineeId}`) } catch (_) {}
 
     // Sync missed questions to flashcard “needs practice” so they appear in focus mode
-    const missedResults = sessionState.questions
+    // (sliced to questionsToScore — same early-exit reasoning as `answers` above)
+    const missedResults = questionsToScore
       .map((q, i) => ({ question: q?.q ?? q?.question ?? '', correct: sessionState.answers[i]?.correct ?? false, testId }))
       .filter((r) => !r.correct && r.question)
     if (userId && missedResults.length > 0) {
@@ -684,7 +702,7 @@ export default function QuizzesPage() {
     // Save missed practice test questions to weakSpots for spaced repetition
     if (mode === 'practice' && currentUser?.uid && testId && testId !== 'generated') {
       const setId = TEST_TO_FLASHCARD_SET[testId] || ''
-      sessionState.questions.forEach((q, i) => {
+      questionsToScore.forEach((q, i) => {
         const correct = sessionState.answers[i]?.correct ?? false
         if (correct || q?.isBonus) return
         const questionText = q?.q ?? q?.question ?? ''
@@ -741,6 +759,36 @@ export default function QuizzesPage() {
     }
   }
 
+  const fetchNextPracticeQuestion = () => {
+    setLoadingNextPractice(true)
+    const data = { TEST_TO_FLASHCARD_SET, FLASHCARD_DATABASE: flashcardDatabase, stableCardId }
+    const history = (sessionState.indices || []).slice(-4)
+    const { question: nextQ, index: nextPoolIndex, cardId: nextCardId } = getNextInfiniteQuestion(testId, traineeId, { getMastery }, history, data)
+    setLoadingNextPractice(false)
+    if (nextQ != null) {
+      setSessionState((s) => ({
+        ...s,
+        questions: [...s.questions, nextQ],
+        indices: [...(s.indices || []), nextPoolIndex],
+        cardIds: [...(s.cardIds || []), nextCardId],
+        index: s.questions.length,
+        chosen: null,
+        showResult: false,
+      }))
+      if (traineeId) {
+        try {
+          const nextQuestions = [...sessionState.questions, nextQ]
+          localStorage.setItem(
+            `${PRACTICE_SESSION_KEY}_${traineeId}`,
+            JSON.stringify({ testId, mode: 'practice', indices: [...(sessionState.indices || []), nextPoolIndex], index: sessionState.questions.length, answers: sessionState.answers, questions: nextQuestions })
+          )
+        } catch (_) {}
+      }
+    } else {
+      endPracticeAndShowResults()
+    }
+  }
+
   const handleNext = () => {
     setSocraticHint(null)
     setEliminatedOptions(new Set())
@@ -749,35 +797,20 @@ export default function QuizzesPage() {
     if (sessionState.index >= sessionState.questions.length - 1) {
       if (mode === 'official') {
         endPracticeAndShowResults()
-      } else {
-        setLoadingNextPractice(true)
-        const data = { TEST_TO_FLASHCARD_SET, FLASHCARD_DATABASE: flashcardDatabase, stableCardId }
-        const history = (sessionState.indices || []).slice(-4)
-        const { question: nextQ, index: nextPoolIndex, cardId: nextCardId } = getNextInfiniteQuestion(testId, traineeId, { getMastery }, history, data)
-        setLoadingNextPractice(false)
-        if (nextQ != null) {
-          setSessionState((s) => ({
-            ...s,
-            questions: [...s.questions, nextQ],
-            indices: [...(s.indices || []), nextPoolIndex],
-            cardIds: [...(s.cardIds || []), nextCardId],
-            index: s.questions.length,
-            chosen: null,
-            showResult: false,
-          }))
-          if (traineeId) {
-            try {
-              const nextQuestions = [...sessionState.questions, nextQ]
-              localStorage.setItem(
-                `${PRACTICE_SESSION_KEY}_${traineeId}`,
-                JSON.stringify({ testId, mode: 'practice', indices: [...(sessionState.indices || []), nextPoolIndex], index: sessionState.questions.length, answers: sessionState.answers, questions: nextQuestions })
-              )
-            } catch (_) {}
-          }
-        } else {
-          endPracticeAndShowResults()
-        }
+        return
       }
+      const atCheckpoint = sessionState.answers.length > 0 && sessionState.answers.length % PRACTICE_CHECKPOINT_SIZE === 0
+      if (atCheckpoint) {
+        confirm(
+          `You've answered ${sessionState.answers.length} questions. Tap OK to keep practicing, or Cancel to see your results now.`,
+          'Nice work!'
+        ).then((keepGoing) => {
+          if (keepGoing) fetchNextPracticeQuestion()
+          else endPracticeAndShowResults()
+        })
+        return
+      }
+      fetchNextPracticeQuestion()
     } else {
       setSessionState((s) => ({
         ...s,
@@ -1298,7 +1331,7 @@ export default function QuizzesPage() {
               Exit Test
             </button>
           <span className="text-sm text-gray-600">
-            {mode === 'practice' ? `Question ${sessionState.index + 1}` : `${sessionState.index + 1} / ${sessionState.questions.length}`}
+            {mode === 'practice' ? `Question ${sessionState.index + 1} of this round` : `${sessionState.index + 1} / ${sessionState.questions.length}`}
             {mode === 'practice' && sessionState.streak > 0 && (
               <span className="ml-2 text-amber-600">Streak: {sessionState.streak}</span>
             )}
@@ -1307,7 +1340,14 @@ export default function QuizzesPage() {
         <div className="mb-2 h-2 w-full overflow-hidden rounded-full bg-gray-200">
           <div
             className="h-full rounded-full bg-[var(--color-primary)] transition-all duration-300"
-            style={{ width: mode === 'practice' ? '100%' : `${((sessionState.index + 1) / sessionState.questions.length) * 100}%` }}
+            style={{
+              // Practice never has a fixed length (it keeps generating questions) —
+              // show progress toward the next 10-question checkpoint instead of a
+              // permanently-full bar that implied a finish line that doesn't exist.
+              width: mode === 'practice'
+                ? `${(((sessionState.index % PRACTICE_CHECKPOINT_SIZE) + 1) / PRACTICE_CHECKPOINT_SIZE) * 100}%`
+                : `${((sessionState.index + 1) / sessionState.questions.length) * 100}%`,
+            }}
           />
         </div>
         <div className="mb-4 text-center">
