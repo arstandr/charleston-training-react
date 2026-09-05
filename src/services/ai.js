@@ -39,11 +39,25 @@ export async function buildGeminiProxyRequest(body) {
 /**
  * Low-level Gemini call (for proxy). Returns response text.
  * Used by Menu Ingestion AI semantic scan and other features.
+ *
+ * thinkingConfig.thinkingBudget defaults to 0 (disabled). gemini-2.5-flash's
+ * "thinking" mode consumes tokens from the SAME maxOutputTokens budget as the
+ * visible answer — confirmed live: a 300-token budget produced 285 thinking
+ * tokens and 11 words of actual text before hitting MAX_TOKENS and cutting
+ * off mid-sentence. None of this file's prompts need extended reasoning
+ * (they're short completions/JSON/phrasing tasks), so this is a default that
+ * every existing caller benefits from, not just new ones — a caller that
+ * genuinely wants thinking can still override generationConfig.thinkingConfig.
  */
 export async function callGemini(contents, generationConfig = {}) {
   const body = {
     contents: Array.isArray(contents) ? contents : [{ role: 'user', parts: [{ text: contents }] }],
-    generationConfig: { maxOutputTokens: 1024, temperature: 0.7, ...generationConfig },
+    generationConfig: {
+      maxOutputTokens: 1024,
+      temperature: 0.7,
+      thinkingConfig: { thinkingBudget: 0 },
+      ...generationConfig,
+    },
   }
   const { headers, body: payload } = await buildGeminiProxyRequest(body)
 

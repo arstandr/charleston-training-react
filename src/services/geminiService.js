@@ -197,7 +197,7 @@ export async function callGemini(prompt, userId, options = {}) {
 
   const body = {
     contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: { temperature, maxOutputTokens: maxTokens },
+    generationConfig: { temperature, maxOutputTokens: maxTokens, thinkingConfig: { thinkingBudget: 0 } },
   }
   if (systemInstruction) {
     body.systemInstruction = systemInstruction
@@ -269,7 +269,7 @@ export async function callGeminiVision(prompt, base64Data, mimeType, userId, opt
         { text: prompt },
       ],
     }],
-    generationConfig: { temperature, maxOutputTokens: maxTokens },
+    generationConfig: { temperature, maxOutputTokens: maxTokens, thinkingConfig: { thinkingBudget: 0 } },
   }
   if (systemInstruction) {
     body.systemInstruction = systemInstruction
