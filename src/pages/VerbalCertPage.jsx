@@ -39,7 +39,6 @@ export default function VerbalCertPage() {
   const [phase4Scores, setPhase4Scores] = useState({})
   const [phase5Scores, setPhase5Scores] = useState({})
   const [phase4Step, setPhase4Step] = useState(0)
-  const [expandedAnswers, setExpandedAnswers] = useState({})
   const [reviewNotes, setReviewNotes] = useState('')
   const [outcome, setOutcome] = useState('certified')
   const [retrainAreas, setRetrainAreas] = useState([])
@@ -251,21 +250,10 @@ export default function VerbalCertPage() {
             {PHASE2_LOCAL_OPTIONS.questions.map((q, idx) => {
               const val = phase2Scores[idx]
               const answer = PHASE2_ANSWERS[q]
-              const key = `p2-${idx}`
-              const isOpen = !!expandedAnswers[key]
               return (
                 <div key={idx} className="p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600">
                   <div className="flex items-center gap-3">
                     <span className="text-sm text-gray-800 dark:text-gray-200 flex-1">{q}</span>
-                    {answer && (
-                      <button
-                        type="button"
-                        onClick={() => setExpandedAnswers((prev) => ({ ...prev, [key]: !prev[key] }))}
-                        className="text-xs font-semibold text-amber-700 dark:text-amber-400 hover:underline shrink-0"
-                      >
-                        {isOpen ? 'Hide answer' : 'Show answer'}
-                      </button>
-                    )}
                     <div className="flex gap-1">
                       <button
                         type="button"
@@ -297,7 +285,7 @@ export default function VerbalCertPage() {
                       </button>
                     </div>
                   </div>
-                  {isOpen && (
+                  {answer && (
                     <VerbalCertAnswerReveal
                       answer={answer}
                       onComplete={(allChecked) => {
@@ -328,8 +316,6 @@ export default function VerbalCertPage() {
                     const key = `${cIdx}-${iIdx}`
                     const checked = phase3Checked[key]
                     const answer = PHASE3_ANSWERS[item]
-                    const answerKey = `p3-${key}`
-                    const isOpen = !!expandedAnswers[answerKey]
                     function markChecked(value) {
                       const next = { ...phase3Checked, [key]: value }
                       setPhase3Checked(next)
@@ -339,27 +325,25 @@ export default function VerbalCertPage() {
                     }
                     return (
                       <div key={key}>
-                        <div className="flex items-center gap-2">
-                          <label className="flex items-center gap-2 flex-1">
-                            <input
-                              type="checkbox"
-                              checked={!!checked}
-                              onChange={(e) => markChecked(e.target.checked)}
-                              className="rounded"
-                            />
-                            <span className="text-sm text-gray-800 dark:text-gray-200">{item}</span>
-                          </label>
-                          {answer && (
-                            <button
-                              type="button"
-                              onClick={() => setExpandedAnswers((prev) => ({ ...prev, [answerKey]: !prev[answerKey] }))}
-                              className="text-xs font-semibold text-amber-700 dark:text-amber-400 hover:underline shrink-0"
-                            >
-                              {isOpen ? 'Hide answer' : 'Show answer'}
-                            </button>
-                          )}
-                        </div>
-                        {isOpen && (
+                        <button
+                          type="button"
+                          onClick={() => markChecked(!checked)}
+                          className={`w-full flex items-center gap-3 py-2.5 px-2 rounded-lg text-left transition-colors ${checked ? 'bg-green-50 dark:bg-green-900/20' : 'hover:bg-gray-50 dark:hover:bg-gray-700/40'}`}
+                        >
+                          <span
+                            className={`flex items-center justify-center w-6 h-6 rounded-md border-2 shrink-0 transition-colors ${
+                              checked ? 'bg-green-600 border-green-600' : 'bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600'
+                            }`}
+                          >
+                            {checked && (
+                              <svg viewBox="0 0 24 24" className="w-4 h-4 text-white" fill="none" stroke="currentColor" strokeWidth={3}>
+                                <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
+                            )}
+                          </span>
+                          <span className="text-sm text-gray-800 dark:text-gray-200">{item}</span>
+                        </button>
+                        {answer && (
                           <VerbalCertAnswerReveal
                             answer={answer}
                             onComplete={(allChecked) => { if (allChecked) markChecked(true) }}
@@ -395,8 +379,6 @@ export default function VerbalCertPage() {
             {(() => {
               const item = PHASE4_BAR.items[phase4Step]
               const answer = PHASE4_ANSWERS[item.text]
-              const answerKey = `p4-${phase4Step}`
-              const isOpen = !!expandedAnswers[answerKey]
               function setPoints(val) {
                 setPhase4Scores((prev) => {
                   const next = { ...prev, [phase4Step]: val }
@@ -407,20 +389,9 @@ export default function VerbalCertPage() {
               }
               return (
                 <div className="rounded-xl border-2 border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 p-5 shadow-sm">
-                  <div className="flex items-start justify-between gap-3 mb-1">
-                    <p className="font-bold text-gray-800 dark:text-white">{item.text}</p>
-                    {answer && (
-                      <button
-                        type="button"
-                        onClick={() => setExpandedAnswers((prev) => ({ ...prev, [answerKey]: !prev[answerKey] }))}
-                        className="text-xs font-semibold text-amber-700 dark:text-amber-400 hover:underline shrink-0"
-                      >
-                        {isOpen ? 'Hide answer' : 'Show answer'}
-                      </button>
-                    )}
-                  </div>
+                  <p className="font-bold text-gray-800 dark:text-white mb-1">{item.text}</p>
                   <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">Worth {item.points} pts</p>
-                  {isOpen && (
+                  {answer && (
                     <VerbalCertAnswerReveal
                       answer={answer}
                       onComplete={(allChecked) => { if (allChecked) setPoints(item.points) }}
@@ -436,7 +407,7 @@ export default function VerbalCertPage() {
                         const v = parseInt(e.target.value, 10)
                         setPoints(isNaN(v) ? 0 : v)
                       }}
-                      className="w-20 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
+                      className="w-24 px-3 py-3 text-lg border-2 border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
                     />
                     <span className="text-sm text-gray-500 dark:text-gray-400">/ {item.points}</span>
                   </div>
